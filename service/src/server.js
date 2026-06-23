@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import eventRoutes from './routes/eventRoutes.js';
+import jobRoutes from './routes/jobRoutes.js';
 
 // Load environment variables (e.g. MONGO_URI, WEBHOOK_SECRET)
 dotenv.config();
@@ -19,6 +20,7 @@ app.use(express.json());
 // --- ROUTES ---
 // Mount the event routes
 app.use('/', eventRoutes);
+app.use('/', jobRoutes);
 
 // --- HEALTH CHECK ---
 // Useful for ensuring the server is running on deployment platforms like Render or AWS
