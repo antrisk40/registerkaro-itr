@@ -57,6 +57,17 @@ export const determineState = async (page) => {
     await checkVisibility(page, '[class*="forgot"], [id*="forgot"]');
 
   if (isForgotPage) {
+    // ── Reset Password page (FINAL STEP after OTP verification) ──────────
+    // Must be checked FIRST inside forgot flow — it has two password inputs
+    // and no radio buttons, so it must not fall through to FORGOT_PASSWORD_PAN.
+    const hasNewPassword     = await checkVisibility(page, 'input[formcontrolname="newPassword"], input[formcontrolname="password"], input[id*="newPassword" i], input[id*="password" i]');
+    const hasConfirmPassword = await checkVisibility(page, 'input[formcontrolname="confirmPassword"], input[formcontrolname="reenterPassword"], input[id*="confirm" i]');
+    const hasPasswordHeading = await checkVisibility(page, 'text="Reset Password", text="Set New Password"');
+
+    if ((hasNewPassword && hasConfirmPassword) || hasPasswordHeading) {
+      return STATES.SET_PASSWORD;
+    }
+
     // OTP choice screen (radio buttons: "Generate OTP" / "I already have an OTP")
     const hasGenerateOtp    = await checkVisibility(page, 'mat-radio-button:has-text("Generate OTP")');
     const hasAlreadyHaveOtp = await checkVisibility(page, 'mat-radio-button:has-text("I already have an OTP")');
@@ -69,7 +80,7 @@ export const determineState = async (page) => {
       return STATES.FORGOT_PASSWORD_METHOD;
     }
 
-    // PAN entry screen — check all known selectors the portal uses for User ID / PAN
+    // PAN entry screen — only match if a non-password text input is visible
     const panVisible = await checkVisibility(
       page,
       'input[formcontrolname*="pan" i], input[formcontrolname*="user" i], input[id*="pan" i], input[id*="user" i], input[placeholder*="User ID" i], input[placeholder*="PAN" i]'
@@ -78,8 +89,8 @@ export const determineState = async (page) => {
       return STATES.FORGOT_PASSWORD_PAN;
     }
 
-    // We're on a forgot-password page but not yet sure which step — wait
-    return STATES.FORGOT_PASSWORD_PAN; // safe fallback: try to fill PAN
+    // Unknown step within forgot-password — wait for next poll cycle
+    return STATES.UNKNOWN;
   }
 
   // 4. ── LOGIN FLOW ──────────────────────────────────────────────────────

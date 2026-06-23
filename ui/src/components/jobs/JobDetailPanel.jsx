@@ -20,7 +20,7 @@ export default function JobDetailPanel({ job: initialJob }) {
 
   const needsInput = INPUT_PHASES.includes(status) && !isTerminal && !stopped;
   const latestOtpPrompt = logs.filter((l) => INPUT_PHASES.includes(l.phase)).at(-1);
-  const displayPassword = recoveredPassword || initialJob.recoveredPassword;
+  const hasPassword = !!(initialJob.hasPassword);
 
   return (
     <div className="space-y-6">
@@ -75,8 +75,8 @@ export default function JobDetailPanel({ job: initialJob }) {
         </Card>
       )}
 
-      {displayPassword && (
-        <RecoveredPasswordCard password={displayPassword} />
+      {hasPassword && (
+        <RecoveredPasswordCard jobId={initialJob._id} hasPassword={hasPassword} />
       )}
 
       <Card className="p-6">
@@ -114,7 +114,7 @@ export default function JobDetailPanel({ job: initialJob }) {
         <h3 className="text-sm font-semibold text-gray-300 mb-3">Live Console</h3>
         <JobConsole jobId={initialJob._id} logs={logs} error={error} stopped={stopped} />
 
-        {initialJob.outcomeMessage && !displayPassword && (
+        {initialJob.outcomeMessage && !hasPassword && (
           <div className="mt-4 p-3 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-300">
             {initialJob.outcomeMessage}
           </div>

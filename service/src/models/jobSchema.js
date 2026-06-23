@@ -44,8 +44,9 @@ const jobSchema = new mongoose.Schema(
     // Outcome message (success/failure details)
     outcomeMessage: { type: String, default: null },
 
-    // Password recovered via Forgot Password / Aadhaar OTP flow
-    recoveredPassword: { type: String, default: null },
+    // AES-256-CBC encrypted password set by the bot on the portal.
+    // NEVER stored in plain text. Decrypted on-demand via GET /api/jobs/:id/reveal-password
+    encryptedPassword: { type: String, default: null },
 
     // PID of the spawned Playwright child process — used to stop the bot
     pid: { type: Number, default: null },

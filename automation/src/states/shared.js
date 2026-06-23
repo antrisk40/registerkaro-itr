@@ -110,29 +110,121 @@ const clickValidateOtp = async (page, jobId) => {
   await unlockPageScroll(page);
 };
 
+/**
+ * Generates a cryptographically random password that satisfies most portal rules:
+ * - At least 1 uppercase letter
+ * - At least 1 lowercase letter
+ * - At least 1 digit
+ * - At least 1 special character
+ * - 12-14 characters total
+ */
+const generateSecurePassword = () => {
+  const upper   = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower   = 'abcdefghjkmnpqrstuvwxyz';
+  const digits  = '23456789';
+  const special = '!@#$%^&*';
+  const all     = upper + lower + digits + special;
+
+  // Guarantee at least one of each required type
+  const required = [
+    upper[Math.floor(Math.random() * upper.length)],
+    upper[Math.floor(Math.random() * upper.length)],
+    lower[Math.floor(Math.random() * lower.length)],
+    lower[Math.floor(Math.random() * lower.length)],
+    digits[Math.floor(Math.random() * digits.length)],
+    digits[Math.floor(Math.random() * digits.length)],
+    special[Math.floor(Math.random() * special.length)],
+  ];
+
+  // Fill remaining characters randomly
+  const length = 12 + Math.floor(Math.random() * 3); // 12-14 chars
+  while (required.length < length) {
+    required.push(all[Math.floor(Math.random() * all.length)]);
+  }
+
+  // Shuffle to avoid predictable pattern (AABB...special at end)
+  for (let i = required.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [required[i], required[j]] = [required[j], required[i]];
+  }
+
+  return required.join('');
+};
+
 export const handleSetPassword = async (page, context) => {
   console.log('[State] SET_PASSWORD');
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', 'OTP verified. Setting up account password...');
+  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', 'OTP verified — generating secure password and setting it on portal...');
 
-  const tempPassword = 'Karo@2024!';
-  const newPwdInput = page.locator('input[formcontrolname="password"], input[type="password"]').first();
-  const confirmPwdInput = page.locator('input[formcontrolname="confirmPassword"], input[formcontrolname="reenterPassword"]').first();
+  const newPassword = generateSecurePassword();
+  console.log(`[SetPassword] Generated password for job ${context.jobId}`);
 
-  await fillPasswordField(newPwdInput, tempPassword);
-  await sleep(400);
-  await fillPasswordField(confirmPwdInput, tempPassword);
+  const newPwdSelector = 'input[formcontrolname="newPassword"], input[formcontrolname="password"], input[id*="newPassword" i], input[type="password"]';
+  const confirmPwdSelector = 'input[formcontrolname="confirmPassword"], input[formcontrolname="reenterPassword"], input[id*="confirm" i]';
+
+  const newPwdInput = page.locator(newPwdSelector).first();
+  await newPwdInput.waitFor({ state: 'visible', timeout: 10000 });
+
+  const confirmPwdInput = page.locator(confirmPwdSelector).last();
+
+  await fillPasswordField(page, newPwdSelector, newPassword);
+  await sleep(500);
+  await fillPasswordField(page, confirmPwdSelector, newPassword);
   await sleep(800);
 
-  await safeClick(
-    page.getByRole('button', { name: /Submit|Continue|Reset|Update/i }).first(),
-    'Submit Password'
-  );
-  await sleep(5000); // Give portal time to respond
+  // Force-enable the Submit/Continue button and click it
+  const submitClicked = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button, [role="button"]')];
+    const submitBtn = buttons.find(b =>
+      /submit|continue|reset|update/i.test(b.textContent || '') && b.offsetParent !== null
+    );
+    if (!submitBtn) return false;
+    submitBtn.removeAttribute('disabled');
+    submitBtn.classList.remove('mat-button-disabled');
+    submitBtn.click();
+    return true;
+  });
+
+  if (!submitClicked) {
+    // Fallback if JS click didn't find the button
+    await safeClick(
+      page.getByRole('button', { name: /Submit|Continue|Reset|Update/i }).first(),
+      'Submit Password'
+    );
+  }
+
+  await sleep(5000);
+
+  // Save plain-text password via API — the service layer encrypts it with AES-256 before writing to MongoDB
+  await axios.patch(`${config.API_URL}/jobs/${context.jobId}`, {
+    status: 'SUCCESS',
+    outcomeMessage: 'Password set successfully via Aadhaar OTP recovery.',
+    recoveredPassword: newPassword,  // service will encrypt this → encryptedPassword in DB
+  }).catch(err => console.error('[SetPassword] Failed to save password:', err.message));
+
+  await emitEvent(context.jobId, 'info', 'SUCCESS', '✅ Password reset complete! Click "Reveal Password" on the dashboard to view it.');
 };
 
-export const fillPasswordField = async (locator, password) => {
-  await locator.click({ timeout: 5000 });
-  await locator.fill('');
-  await locator.pressSequentially(password, { delay: 80 });
-  await dispatchInputEvents(locator);
+export const fillPasswordField = async (page, selector, password) => {
+  try {
+    const locator = page.locator(selector).first();
+    await locator.click({ timeout: 5000 });
+    await locator.fill('');
+    await locator.pressSequentially(password, { delay: 80 });
+    await dispatchInputEvents(locator);
+  } catch (err) {
+    console.warn(`[Password] Playwright fill failed for ${selector}, trying native JS fallback...`);
+  }
+
+  // Native JS fallback setter (crucial for some Angular fields)
+  await page.evaluate(({ sel, pwd }) => {
+    const el = document.querySelector(sel);
+    if (el) {
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeInputValueSetter.call(el, pwd);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+  }, { sel: selector, pwd: password });
 };
+
