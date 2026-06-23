@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
-import Event from '../../../shared/eventSchema.js';
-import Job from '../../../shared/jobSchema.js'; 
+import Event from '../models/eventSchema.js';
+import Job from '../models/jobSchema.js'; 
 
 // Create a local Node.js Event Emitter. 
 // This acts as our "Ring Buffer" to fan out live events to connected clients.

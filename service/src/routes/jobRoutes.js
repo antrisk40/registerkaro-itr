@@ -1,10 +1,13 @@
 import express from 'express';
-import { getJobStatus, submitOtp } from '../controllers/jobController.js';
+import { submitOtp, getJobStatus, getAllJobs } from '../controllers/jobController.js';
 
 const router = express.Router();
 
-// GET /api/jobs/:jobId - For the bot to poll the OTP status
+// GET /api/jobs/:jobId - For the bot to// Polling endpoint for Playwright bot
 router.get('/api/jobs/:jobId', getJobStatus);
+
+// Endpoint for Next.js Admin Dashboard to fetch all jobs
+router.get('/api/jobs', getAllJobs);
 
 // POST /api/jobs/:jobId/otp - For the UI to submit the OTP
 router.post('/api/jobs/:jobId/otp', submitOtp);

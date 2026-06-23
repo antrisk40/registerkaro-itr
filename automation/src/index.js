@@ -28,6 +28,9 @@ const pollForOtp = async (jobId) => {
 };
 
 const runBot = async () => {
+  // Wait 3 seconds to ensure the Express backend is fully booted before sending webhooks
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
   const jobId = DUMMY_JOB_ID;
   const pan = DUMMY_PAN;
   

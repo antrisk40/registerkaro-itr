@@ -1,26 +1,20 @@
-import mongoose from 'mongoose';
-import Job from '../../../shared/jobSchema.js';
 import JobCard from '../components/JobCard';
 
 // Ensures Next.js doesn't statically cache this page
 export const dynamic = 'force-dynamic';
 
 async function getJobs() {
-  const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/registerkaro';
-  if (mongoose.connection.readyState !== 1) {
-    await mongoose.connect(MONGO_URI);
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4000/api';
+  try {
+    // We use no-store to ensure the Server Component always fetches fresh data on load
+    const res = await fetch(`${API_URL}/jobs`, { cache: 'no-store' });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.jobs || [];
+  } catch (err) {
+    console.error('Failed to fetch jobs from API', err);
+    return [];
   }
-  
-  // Fetch all jobs, latest first
-  const jobs = await Job.find({}).sort({ updatedAt: -1 }).lean();
-  
-  // Mongoose lean() returns ObjectIds which must be stringified for Server Components passing props to Client Components
-  return jobs.map(j => ({
-    ...j,
-    _id: j._id.toString(),
-    createdAt: j.createdAt.toISOString(),
-    updatedAt: j.updatedAt.toISOString(),
-  }));
 }
 
 export default async function AdminDashboard() {

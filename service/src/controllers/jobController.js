@@ -1,4 +1,4 @@
-import Job from '../../../shared/jobSchema.js';
+import Job from '../models/jobSchema.js';
 
 export const getJobStatus = async (req, res) => {
   try {
@@ -10,6 +10,16 @@ export const getJobStatus = async (req, res) => {
     return res.status(200).json({ job });
   } catch (error) {
     console.error('[Jobs] Error fetching job:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getAllJobs = async (req, res) => {
+  try {
+    const jobs = await Job.find({}).sort({ updatedAt: -1 }).lean();
+    return res.status(200).json({ jobs });
+  } catch (error) {
+    console.error('[Jobs] Error fetching all jobs:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
