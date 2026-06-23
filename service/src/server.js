@@ -2,11 +2,16 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import eventRoutes from './routes/eventRoutes.js';
 import jobRoutes from './routes/jobRoutes.js';
 
-// Load environment variables (e.g. MONGO_URI, WEBHOOK_SECRET)
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load environment variables from service/.env (explicit path so CWD doesn't matter)
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 

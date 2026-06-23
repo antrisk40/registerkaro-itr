@@ -1,26 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { getApiBase } from '../../lib/api';
 import Button from '../ui/Button';
 
 export default function CorrectionForm({ jobId, initialPayload, correctionMessage, correctionField, correctionOptions, onSubmitted }) {
   const [submitting, setSubmitting] = useState(false);
-  const [payload, setPayload] = useState(initialPayload || {});
 
-  // Debug logging
-  console.log('[CorrectionForm Debug]', { correctionField, correctionOptions, correctionMessage });
+  // Pre-select the second option ("Generate OTP") automatically for aadhaarOtpChoice
+  const getDefaultPayload = () => {
+    if (correctionField === 'aadhaarOtpChoice' && correctionOptions?.length >= 2) {
+      return { ...(initialPayload || {}), [correctionField]: correctionOptions[1] };
+    }
+    return initialPayload || {};
+  };
+
+  const [payload, setPayload] = useState(getDefaultPayload);
 
   // Detect if this is a simple choice gate (not a registration correction)
   const isChoiceGate = correctionField && correctionOptions && correctionOptions.length > 0;
   const isAccountRecoveryChoice = correctionField === 'aadhaarOtpChoice';
-
-  // Reset payload when correctionField changes (e.g., from null to aadhaarOtpChoice)
-  useEffect(() => {
-    if (correctionField) {
-      setPayload(p => ({ ...p }));
-    }
-  }, [correctionField]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -63,7 +62,7 @@ export default function CorrectionForm({ jobId, initialPayload, correctionMessag
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <p className="text-sm text-slate-300 leading-relaxed">{correctionMessage}</p>
         <div className="flex flex-col gap-2">
-          {correctionOptions.map(opt => (
+          {correctionOptions?.map(opt => (
             <label
               key={opt}
               className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${

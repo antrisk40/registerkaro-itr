@@ -11,10 +11,20 @@ export const handleUnknownState = async (page, context) => {
 
 export const handleLoginPage = async (page, context) => {
   console.log('[State] LOGIN_PAGE');
-  const panInput = page.locator('input[id="panAdhaarUserId"]').first();
-  await panInput.waitFor({ state: 'visible', timeout: 10000 });
   
-  await safeFill(panInput, context.pan, 'PAN input');
+  const panInputs = page.locator('input[id="panAdhaarUserId"]');
+  await panInputs.first().waitFor({ state: 'attached', timeout: 10000 });
+  
+  let visiblePanInput = panInputs.first();
+  const count = await panInputs.count();
+  for (let i = 0; i < count; i++) {
+    if (await panInputs.nth(i).isVisible()) {
+      visiblePanInput = panInputs.nth(i);
+      break;
+    }
+  }
+
+  await safeFill(visiblePanInput, context.pan, 'PAN input on Login');
   await sleep(500);
   await safeClick(page.locator('button.large-button-primary').first(), 'Continue');
   await sleep(4000); // Give portal time to respond (might transition to PASSWORD, REGISTER, or FORGOT_PASSWORD)
