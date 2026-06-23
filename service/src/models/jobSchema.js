@@ -26,6 +26,12 @@ const jobSchema = new mongoose.Schema(
     // OTP submitted by the human operator via the dashboard
     suppliedOtp: { type: String, default: null },
 
+    // Set by bot when portal rejects OTP; cleared on resubmit/resend
+    lastOtpError: { type: String, default: null },
+
+    // UI sets true → bot clicks Resend on portal then clears
+    resendOtpRequested: { type: Boolean, default: false },
+
     // Outcome message (success/failure details)
     outcomeMessage: { type: String, default: null },
 

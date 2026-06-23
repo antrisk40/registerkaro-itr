@@ -34,8 +34,12 @@ export const submitOtp = async (req, res) => {
     }
 
     const job = await Job.findByIdAndUpdate(
-      jobId, 
-      { suppliedOtp: otp, updatedAt: Date.now() },
+      jobId,
+      {
+        suppliedOtp: otp,
+        lastOtpError: null,
+        updatedAt: Date.now(),
+      },
       { new: true }
     );
 
@@ -50,14 +54,42 @@ export const submitOtp = async (req, res) => {
   }
 };
 
+export const requestResendOtp = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+
+    const job = await Job.findByIdAndUpdate(
+      jobId,
+      {
+        $set: {
+          resendOtpRequested: true,
+          suppliedOtp: null,
+          lastOtpError: null,
+          updatedAt: Date.now(),
+        },
+      },
+      { new: true }
+    );
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    return res.status(200).json({ success: true, job });
+  } catch (error) {
+    console.error('[Jobs] Error requesting OTP resend:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 /**
- * PATCH /api/jobs/:jobId — generic field patcher used by the bot to store its PID
- * and by the UI to set suppliedOtp to null (OTP retry clearing).
+ * PATCH /api/jobs/:jobId — generic field patcher used by the bot to store its PID,
+ * clear OTP on retry, and sync OTP error/resend flags.
  */
 export const patchJob = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const allowed = ['pid', 'suppliedOtp']; // Only allow safe fields to be patched externally
+    const allowed = ['pid', 'suppliedOtp', 'lastOtpError', 'resendOtpRequested'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];

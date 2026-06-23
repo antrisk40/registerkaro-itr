@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getApiBase } from '../lib/api';
 
 export function useSSEStream(jobId) {
   const [logs, setLogs] = useState([]);
@@ -8,7 +9,7 @@ export function useSSEStream(jobId) {
     if (!jobId) return;
 
     // Use EventSource to connect to Express SSE endpoint
-    const url = `${process.env.NEXT_PUBLIC_API_URL}/stream/${jobId}`;
+    const url = `${getApiBase()}/stream/${jobId}`;
     const eventSource = new EventSource(url);
 
     eventSource.onmessage = (event) => {

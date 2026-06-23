@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import Job from '../models/jobSchema.js';
 
@@ -22,13 +23,17 @@ export const launchJob = async (req, res) => {
 
     console.log(`[Orchestrator] Launching bot — PAN: ${pan}, Category: ${category}`);
 
-    const automationDir = path.resolve(__dirname, '../../../../automation');
+    const automationDir = path.resolve(__dirname, '../../../automation');
+
+    // Generate a fresh MongoDB-compatible ObjectId (24 hex characters)
+    const jobId = crypto.randomBytes(12).toString('hex');
 
     const botProcess = spawn('node', ['src/index.js'], {
       cwd: automationDir,
       env: {
         ...process.env,
         TARGET_PAN:        pan,
+        JOB_ID:            jobId,
         IS_OTHERS:         String(!!isOthers),
         TAXPAYER_CATEGORY: category        || 'Individual',
         REG_LAST_NAME:     lastName        || '',
@@ -44,18 +49,26 @@ export const launchJob = async (req, res) => {
       stdio: 'ignore',
     });
 
+    botProcess.on('error', (err) => {
+      console.error(`[Orchestrator] Failed to spawn bot process: ${err.message}`);
+    });
+
     botProcess.unref();
     const pid = botProcess.pid;
 
-    // Clean up the in-memory map when process exits
-    botProcess.on('exit', () => {
-      for (const [jid, p] of runningPids.entries()) {
-        if (p === pid) { runningPids.delete(jid); break; }
+    // Immediately create the Job document with the PID so Stop works instantly
+    await Job.create({
+      _id: jobId,
+      maskedPan: `${pan.slice(0, 3)}***${pan.slice(-2)}`,
+      status: 'INIT',
+      pid: pid,
+      registrationPayload: {
+        isOthers, category, lastName, middleName, firstName, dateOfBirth, gender, residentialStatus, email, mobile
       }
     });
 
-    console.log(`[Orchestrator] Bot spawned with PID: ${pid}`);
-    return res.status(200).json({ success: true, pid, message: 'Bot launched in background' });
+    console.log(`[Orchestrator] Bot spawned with PID: ${pid} and JobId: ${jobId}`);
+    return res.status(200).json({ success: true, jobId, pid, message: 'Bot launched in background' });
 
   } catch (error) {
     console.error('[Orchestrator] Failed to launch bot:', error);
@@ -70,30 +83,28 @@ export const launchJob = async (req, res) => {
  */
 export const stopJob = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { jobId } = req.params;
 
-    const job = await Job.findById(id);
+    const job = await Job.findById(jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    if (!job.pid) {
-      return res.status(400).json({ error: 'No PID stored for this job. Bot may have already exited.' });
-    }
-
-    // Kill the process tree (SIGTERM for graceful, then SIGKILL as fallback)
-    try {
-      process.kill(job.pid, 'SIGTERM');
-    } catch (killErr) {
-      if (killErr.code !== 'ESRCH') { // ESRCH = process not found (already dead)
-        throw killErr;
+    // Kill the process tree if a PID exists
+    if (job.pid) {
+      try {
+        process.kill(job.pid, 'SIGTERM');
+      } catch (killErr) {
+        if (killErr.code !== 'ESRCH') { // ESRCH = process not found (already dead)
+          throw killErr;
+        }
       }
     }
 
-    // Mark job as FAILED in DB
-    await Job.findByIdAndUpdate(id, {
+    // Mark job as FAILED in DB (clean up state even if PID was missing)
+    await Job.findByIdAndUpdate(jobId, {
       $set: { status: 'FAILED', pid: null, outcomeMessage: 'Stopped by user' }
     });
 
-    return res.status(200).json({ success: true, message: `Bot (PID ${job.pid}) stopped successfully` });
+    return res.status(200).json({ success: true, message: `Bot stopped successfully` });
 
   } catch (error) {
     console.error('[Orchestrator] Failed to stop bot:', error);

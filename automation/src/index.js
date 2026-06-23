@@ -2,7 +2,6 @@ import { chromium } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import axios from 'axios';
 import dotenv from 'dotenv';
-import crypto from 'crypto';
 import { emitEvent } from './utils/emitter.js';
 
 dotenv.config();
@@ -14,6 +13,7 @@ const {
   API_URL,
   DUMMY_PAN,
   TARGET_PAN,
+  JOB_ID,
   IS_OTHERS,
   TAXPAYER_CATEGORY,
   REG_LAST_NAME,
@@ -28,21 +28,289 @@ const {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Poll Express API until the human operator submits an OTP for this job */
-const pollForOtp = async (jobId) => {
+/** Poll Express API until the human operator submits an OTP (handles resend requests) */
+const pollForOtp = async (jobId, page = null) => {
   console.log(`[Polling] Waiting for OTP on job ${jobId}...`);
   while (true) {
     try {
       const { data } = await axios.get(`${API_URL}/jobs/${jobId}`);
-      if (data.job?.suppliedOtp) {
-        console.log(`[Polling] OTP received: ${data.job.suppliedOtp}`);
-        return data.job.suppliedOtp;
+      const job = data.job;
+
+      if (page && job?.resendOtpRequested) {
+        await clickPortalResend(page, jobId);
+        await axios.post(`${API_URL}/jobs/${jobId}`, {
+          resendOtpRequested: false,
+          suppliedOtp: null,
+          lastOtpError: null,
+        }).catch(() => {});
+        await emitEvent(jobId, 'info', 'OTP_GATE', 'Resend OTP process completed. Waiting for new OTP...');
+      }
+
+      if (job?.suppliedOtp) {
+        console.log(`[Polling] OTP received for job ${jobId}`);
+        return job.suppliedOtp;
       }
     } catch (err) {
       console.error('[Polling Error]', err.message);
     }
-    await sleep(2000);
+    await sleep(1500);
   }
+};
+
+const clickPortalResend = async (page, jobId) => {
+  await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Attempting to click "Resend OTP" link on portal...');
+  
+  // Resend OTP is often an <a> tag or a <span> instead of a button
+  const resend = page.locator('a, button, span, [role="button"]').filter({ hasText: /resend/i }).first();
+  
+  try {
+    await resend.click({ timeout: 5000 });
+    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Successfully clicked Resend OTP');
+  } catch (e) {
+    await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] Failed to click Resend OTP normally, trying JS click. Error: ${e.message}`);
+    await resend.evaluate((el) => el.click()).catch(err => {
+      emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] JS Resend click also failed: ${err.message}`);
+    });
+  }
+  
+  await sleep(3000);
+};
+
+/** Fire DOM events so Angular/Material registers typed OTP values */
+const dispatchInputEvents = async (locator) => {
+  await locator.evaluate((el) => {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
+  });
+};
+
+/** Prevent focus/scroll fighting while entering OTP */
+const lockPageScroll = async (page) => {
+  await page.evaluate(() => {
+    window.__savedScrollY = window.scrollY;
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  });
+};
+
+const unlockPageScroll = async (page) => {
+  await page.evaluate(() => {
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+    if (typeof window.__savedScrollY === 'number') {
+      window.scrollTo({ top: window.__savedScrollY, behavior: 'instant' });
+    }
+  });
+};
+
+const blurActiveElement = async (page) => {
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  });
+};
+
+/** Read combined value from split OTP inputs */
+const readOtpValue = async (otpBoxes, count) => {
+  let combined = '';
+  for (let i = 0; i < count; i++) {
+    combined += await otpBoxes.nth(i).inputValue().catch(() => '');
+  }
+  return combined.replace(/\s/g, '');
+};
+
+/** Type OTP without clearing previous boxes or pressing Tab (Tab causes scroll bounce) */
+const fillOtp = async (page, otp) => {
+  const cleanOtp = String(otp).replace(/\s/g, '');
+  if (!cleanOtp) return;
+
+  await lockPageScroll(page);
+
+  const otpBoxes = page.locator(
+    'input.otp-input, input[autocomplete="one-time-code"], input[formcontrolname="otpDigit"], input[inputmode="numeric"][maxlength="1"]'
+  );
+  const count = await otpBoxes.count();
+
+  const verifyFilled = async () => {
+    if (count === 0) {
+      const field = page.locator('input[formcontrolname="otp"], input[name="otp"]').first();
+      if (!(await field.isVisible({ timeout: 500 }).catch(() => false))) return false;
+      const val = (await field.inputValue().catch(() => '')).replace(/\s/g, '');
+      return val.length >= cleanOtp.length;
+    }
+    if (count === 1) {
+      const val = (await otpBoxes.first().inputValue().catch(() => '')).replace(/\s/g, '');
+      return val.length >= cleanOtp.length;
+    }
+    const entered = await readOtpValue(otpBoxes, count);
+    return entered === cleanOtp;
+  };
+
+  const clearFirstBox = async (locator) => {
+    await locator.click({ timeout: 5000, noWaitAfter: true });
+    await sleep(150);
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Backspace');
+    await sleep(100);
+  };
+
+  // Strategy 1: type full OTP in first box — widget auto-advances
+  if (count >= 1) {
+    try {
+      const first = otpBoxes.first();
+      await clearFirstBox(first);
+      await first.pressSequentially(cleanOtp, { delay: 150 });
+      await sleep(600);
+      if (await verifyFilled()) {
+        console.log('[OTP] Filled via first-box typing');
+        await blurActiveElement(page);
+        return;
+      }
+    } catch (e) {
+      console.warn('[OTP] Strategy 1 failed:', e.message);
+    }
+  }
+
+  // Strategy 2: paste into first box
+  if (count >= 1) {
+    try {
+      const first = otpBoxes.first();
+      await clearFirstBox(first);
+      await page.evaluate(async (text) => {
+        await navigator.clipboard.writeText(text);
+      }, cleanOtp);
+      await page.keyboard.press('Control+v');
+      await sleep(600);
+      if (await verifyFilled()) {
+        console.log('[OTP] Filled via paste');
+        await blurActiveElement(page);
+        return;
+      }
+    } catch (e) {
+      console.warn('[OTP] Strategy 2 failed:', e.message);
+    }
+  }
+
+  // Strategy 3: set all digit boxes at once — no focus() calls (avoids scroll jumps)
+  if (count > 1) {
+    try {
+      await otpBoxes.first().evaluate((firstEl, { digits }) => {
+        const root = firstEl.closest('form, [class*="otp"], [class*="OTP"], div') || firstEl.parentElement;
+        const inputs = root
+          ? [...root.querySelectorAll('input[inputmode="numeric"], input.otp-input, input[autocomplete="one-time-code"], input[maxlength="1"]')]
+          : [firstEl];
+        const boxes = inputs.filter((el) => el.maxLength === 1 || el.classList.contains('otp-input'));
+        const targets = boxes.length >= digits.length ? boxes : inputs;
+
+        digits.split('').forEach((digit, i) => {
+          const el = targets[i];
+          if (!el) return;
+          el.value = digit;
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, data: digit, inputType: 'insertText' }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+      }, { digits: cleanOtp });
+      await sleep(500);
+      if (await verifyFilled()) {
+        console.log('[OTP] Filled via atomic evaluate');
+        await blurActiveElement(page);
+        return;
+      }
+    } catch (e) {
+      console.warn('[OTP] Strategy 3 failed:', e.message);
+    }
+  }
+
+  // Strategy 4: single combined field
+  try {
+    const field = page.locator('input[formcontrolname="otp"], input[name="otp"]').first();
+    if (await field.isVisible({ timeout: 2000 })) {
+      await clearFirstBox(field);
+      await field.pressSequentially(cleanOtp, { delay: 150 });
+      await dispatchInputEvents(field);
+      console.log('[OTP] Filled via single OTP field');
+    }
+  } catch (e) {
+    console.warn('[OTP] Strategy 4 failed:', e.message);
+  }
+
+  await blurActiveElement(page);
+};
+
+/** Click Validate once scroll is stable — no repeated isVisible polling */
+const clickValidateOtp = async (page, jobId) => {
+  await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Locating Validate/Submit button...');
+  await blurActiveElement(page);
+  await sleep(400);
+
+  // Dump all visible buttons to logs for debugging
+  const buttonDump = await page.evaluate(() => {
+    const btns = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+    const matches = btns.filter(b => /validate|verify|submit|confirm|continue/i.test(b.textContent || ''));
+    return matches.map(b => ({
+      text: (b.textContent || '').trim().replace(/\s+/g, ' '),
+      tag: b.tagName,
+      disabled: b.disabled || b.hasAttribute('disabled')
+    }));
+  });
+  
+  await emitEvent(jobId, 'info', 'OTP_GATE', `[Bot Action] Found matching buttons: ${JSON.stringify(buttonDump)}`);
+
+  try {
+    await page.waitForFunction(() => {
+      const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      // Exclude "Back" or "Cancel" just in case they have weird text
+      const target = buttons.find((b) => /validate|verify|submit|confirm|continue/i.test(b.textContent || '') && !/cancel/i.test(b.textContent || ''));
+      return target && !target.disabled && !target.hasAttribute('disabled');
+    }, { timeout: 15000 });
+  } catch {
+    await emitEvent(jobId, 'warn', 'OTP_GATE', '[Bot Warning] Validate button is still disabled or not found after 15s wait. Proceeding anyway.');
+  }
+
+  const btnIndex = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+    const targetIndex = buttons.findIndex((b) => {
+      const text = b.textContent || '';
+      return /validate|verify|submit|confirm|continue/i.test(text) && !/cancel/i.test(text) && !b.disabled && !b.hasAttribute('disabled');
+    });
+    
+    if (targetIndex !== -1) {
+      buttons[targetIndex].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    }
+    return targetIndex;
+  });
+
+  await sleep(600);
+
+  try {
+    if (btnIndex === -1) {
+      // Fallback: Just click anything that matches via playwright
+      const fallbackBtn = page.locator('button:visible, a:visible, [role="button"]:visible')
+        .filter({ hasText: /validate|verify|submit|confirm|continue/i }).last();
+      await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Clicking fallback Validate/Submit button...');
+      await fallbackBtn.click({ timeout: 5000, noWaitAfter: true });
+    } else {
+      await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Executing JS click on located active button...');
+      await page.evaluate((idx) => {
+        const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+        buttons[idx].click();
+      }, btnIndex);
+    }
+    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Successfully triggered Validate/Submit action');
+  } catch (e) {
+    await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] Click failed completely: ${e.message}`);
+  }
+
+  await unlockPageScroll(page);
+};
+
+const setOtpError = async (jobId, message) => {
+  await axios.post(`${API_URL}/jobs/${jobId}`, {
+    suppliedOtp: null,
+    lastOtpError: message,
+  }).catch(() => {});
 };
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -62,7 +330,100 @@ const safeFill = async (locator, value, label) => {
   }
 };
 
-/** Check for known error banners and return the error text or null */
+/** Check if the portal is showing an OTP entry screen */
+const isOtpScreenVisible = async (page) => {
+  const inputSelectors = [
+    'input.otp-input',
+    'input[autocomplete="one-time-code"]',
+    'input[formcontrolname="otp"]',
+    'input[name="otp"]',
+  ];
+  for (const sel of inputSelectors) {
+    try {
+      if (await page.locator(sel).first().isVisible({ timeout: 1500 })) return true;
+    } catch { /* ignore */ }
+  }
+  try {
+    return await page.getByText(/enter otp|verify otp|one.?time password|otp verification|mobile otp|email otp/i)
+      .first().isVisible({ timeout: 1000 });
+  } catch {
+    return false;
+  }
+};
+
+/** Wait for human OTP, fill it, and retry on failure */
+const handleOtpGate = async (page, jobId, message) => {
+  await emitEvent(jobId, 'info', 'OTP_GATE', message);
+  await axios.post(`${API_URL}/jobs/${jobId}`, { lastOtpError: null }).catch(() => {});
+
+  let otpAttempts = 0;
+  const MAX_OTP_ATTEMPTS = 3;
+
+  while (otpAttempts < MAX_OTP_ATTEMPTS) {
+    const otp = await pollForOtp(jobId, page);
+
+    console.log(`[Action] Entering OTP (attempt ${otpAttempts + 1})`);
+    try {
+      await fillOtp(page, otp);
+      await sleep(500);
+      await clickValidateOtp(page, jobId);
+    } catch (e) {
+      await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] OTP entry/validate failed: ${e.message}`);
+      await unlockPageScroll(page).catch(() => {});
+    }
+    await sleep(4000);
+
+    const otpErr = await getErrorBanner(page);
+    if (otpErr && /invalid|incorrect|expired|wrong|mismatch|not valid/i.test(otpErr)) {
+      otpAttempts++;
+      const errMsg = `Invalid OTP: ${otpErr}`;
+      await emitEvent(jobId, 'warn', 'OTP_GATE', `${errMsg}. Enter a new OTP or click Resend on the dashboard.`);
+      await setOtpError(jobId, errMsg);
+      if (otpAttempts >= MAX_OTP_ATTEMPTS) {
+        await emitEvent(jobId, 'error', 'FAILED', `OTP failed after ${MAX_OTP_ATTEMPTS} attempts. Manual intervention required.`);
+        throw new Error('OTP verification failed');
+      }
+    } else if (await isOtpScreenVisible(page)) {
+      otpAttempts++;
+      const errMsg = 'OTP was not accepted. The Validate button may still be disabled — try a new OTP.';
+      await emitEvent(jobId, 'warn', 'OTP_GATE', `${errMsg} (attempt ${otpAttempts})`);
+      await setOtpError(jobId, errMsg);
+      if (otpAttempts >= MAX_OTP_ATTEMPTS) {
+        await emitEvent(jobId, 'error', 'FAILED', `OTP failed after ${MAX_OTP_ATTEMPTS} attempts.`);
+        throw new Error('OTP verification failed');
+      }
+    } else {
+      await axios.post(`${API_URL}/jobs/${jobId}`, { lastOtpError: null, suppliedOtp: null }).catch(() => {});
+      return;
+    }
+  }
+};
+
+/** If OTP screen appears at any step, handle it before continuing */
+const handleOtpIfVisible = async (page, jobId, message) => {
+  if (await isOtpScreenVisible(page)) {
+    await handleOtpGate(page, jobId, message);
+    await sleep(2000);
+    return true;
+  }
+  return false;
+};
+
+/** Wait for OTP screen to appear (portal may load it after a delay) then handle it */
+const waitAndHandleOtp = async (page, jobId, message, maxWaitMs = 8000) => {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    if (await isOtpScreenVisible(page)) {
+      await handleOtpGate(page, jobId, message);
+      await sleep(2000);
+      return true;
+    }
+    await sleep(1500);
+  }
+  // Final check — OTP may have appeared right at the deadline
+  return handleOtpIfVisible(page, jobId, message);
+};
+
 const getErrorBanner = async (page) => {
   const selectors = [
     '.errorMsg', '.error-message', '.alert-danger',
@@ -85,7 +446,7 @@ const getErrorBanner = async (page) => {
 const runBot = async () => {
   await sleep(3000); // Let Express fully boot
 
-  const jobId   = crypto.randomBytes(12).toString('hex');
+  const jobId   = JOB_ID || process.env.DUMMY_JOB_ID;
   const pan     = TARGET_PAN || DUMMY_PAN;
   const isOthers = IS_OTHERS === 'true';
   const category = TAXPAYER_CATEGORY || 'Individual';
@@ -103,16 +464,12 @@ const runBot = async () => {
   };
 
   if (!pan) { console.error('No PAN provided.'); process.exit(1); }
+  if (!jobId) { console.error('No JOB_ID provided.'); process.exit(1); }
 
   await emitEvent(jobId, 'info', 'INIT', `Bot launched for PAN: ${pan.slice(0,3)}***${pan.slice(-2)}`);
 
-  // Store PID in the job so Express can kill it later if user clicks Stop
-  try {
-    await axios.post(`${API_URL}/jobs/${jobId}`, { pid: process.pid });
-  } catch { /* non-fatal */ }
-
   const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page    = await context.newPage();
 
   try {
@@ -201,6 +558,18 @@ const runBot = async () => {
         }
       } catch { console.log('[Skip] No UIDAI popup detected'); }
 
+      // OTP may appear immediately after UIDAI consent (before Basic Details)
+      try {
+        await waitAndHandleOtp(
+          page, jobId,
+          'OTP sent after UIDAI verification. Please enter OTP on the dashboard.'
+        );
+      } catch (otpErr) {
+        await sleep(60000);
+        await browser.close();
+        return;
+      }
+
       // ── CHECK FOR ERRORS BEFORE PROCEEDING ───────────────────────────────
       const earlyErr = await getErrorBanner(page);
       if (earlyErr) {
@@ -211,6 +580,7 @@ const runBot = async () => {
       // ═══════════════════════════════════════════════════════════════════
       //  BASIC DETAILS TAB
       // ═══════════════════════════════════════════════════════════════════
+      if (!(await isOtpScreenVisible(page))) {
       await emitEvent(jobId, 'info', 'BASIC_DETAILS', 'Filling in Basic Details...');
       await sleep(2000);
 
@@ -260,14 +630,18 @@ const runBot = async () => {
         await sleep(30000); await browser.close(); return;
       }
 
-      // Continue to next tab
-      console.log('[Action] Clicking Continue to Contact Details');
-      await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to Contact');
-      await sleep(3000);
+      // Continue to next tab (skip if still on OTP screen)
+      if (!(await isOtpScreenVisible(page))) {
+        console.log('[Action] Clicking Continue to Contact Details');
+        await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to Contact');
+        await sleep(3000);
+      }
+      } // end basic details block
 
       // ═══════════════════════════════════════════════════════════════════
       //  CONTACT DETAILS TAB
       // ═══════════════════════════════════════════════════════════════════
+      if (!(await isOtpScreenVisible(page))) {
       await emitEvent(jobId, 'info', 'CONTACT_DETAILS', 'Filling in Contact Details...');
 
       if (regData.mobile) {
@@ -293,72 +667,18 @@ const runBot = async () => {
         await sleep(30000); await browser.close(); return;
       }
 
-      // Continue
-      console.log('[Action] Clicking Continue to OTP verification');
-      await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to OTP');
-      await sleep(4000);
-
-      // ═══════════════════════════════════════════════════════════════════
-      //  OTP GATE — Wait for human to submit OTP
-      // ═══════════════════════════════════════════════════════════════════
-      await emitEvent(jobId, 'info', 'OTP_GATE', 'OTP sent to registered mobile/email. Please enter OTP on the dashboard.');
-
-      let otp = null;
-      let otpAttempts = 0;
-      const MAX_OTP_ATTEMPTS = 3;
-
-      while (otpAttempts < MAX_OTP_ATTEMPTS) {
-        otp = await pollForOtp(jobId);
-        
-        // Fill OTP — The portal uses individual digit boxes
-        console.log(`[Action] Entering OTP: ${otp} (attempt ${otpAttempts + 1})`);
-        try {
-          // Try single OTP input field first
-          const singleOtpInput = page.locator('input.otp-input, input[autocomplete="one-time-code"]').first();
-          if (await singleOtpInput.isVisible({ timeout: 2000 })) {
-            // Individual digit boxes — type into the first one and let the portal tab through
-            const otpBoxes = await page.locator('input.otp-input, input[autocomplete="one-time-code"]').all();
-            for (let i = 0; i < otpBoxes.length && i < otp.length; i++) {
-              await otpBoxes[i].fill(otp[i]);
-              await sleep(100);
-            }
-          } else {
-            // Single field OTP
-            const field = page.locator('input[formcontrolname="otp"], input[name="otp"]').first();
-            await field.fill(otp, { timeout: 5000 });
-          }
-        } catch (e) {
-          console.warn('[Warning] OTP fill failed:', e.message);
-        }
-        
-        await sleep(500);
-        
-        // Click Validate / Submit OTP
-        await safeClick(page.getByRole('button', { name: /validate|submit|verify|continue/i }).first(), 'Submit OTP');
+      // Continue — OTP may appear after contact details
+      if (!(await isOtpScreenVisible(page))) {
+        console.log('[Action] Clicking Continue to OTP verification');
+        await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to OTP');
         await sleep(4000);
-        
-        // Check for OTP error
-        const otpErr = await getErrorBanner(page);
-        if (otpErr && /invalid|incorrect|expired|wrong/i.test(otpErr)) {
-          otpAttempts++;
-          if (otpAttempts < MAX_OTP_ATTEMPTS) {
-            await emitEvent(jobId, 'warn', 'OTP_GATE', `OTP attempt ${otpAttempts} failed: "${otpErr}". Resending OTP...`);
-            // Clear the previous OTP from database so operator can submit fresh OTP
-            await axios.post(`${API_URL}/jobs/${jobId}`, { suppliedOtp: null }).catch(() => {});
-            // Click Resend OTP if available
-            const resendBtn = page.getByRole('button', { name: /resend/i }).first();
-            await safeClick(resendBtn, 'Resend OTP');
-            await sleep(3000);
-          } else {
-            await emitEvent(jobId, 'error', 'FAILED', `OTP failed after ${MAX_OTP_ATTEMPTS} attempts. Manual intervention required.`);
-            await sleep(60000); // Keep browser open for manual check
-            await browser.close(); return;
-          }
-        } else {
-          // OTP accepted!
-          break;
-        }
       }
+
+      await handleOtpIfVisible(
+        page, jobId,
+        'OTP sent to registered mobile/email. Please enter OTP on the dashboard.'
+      );
+      } // end contact details block
 
       // ═══════════════════════════════════════════════════════════════════
       //  ACCOUNT RECOVERY — Set password and security question (if prompted)
@@ -422,23 +742,16 @@ const runBot = async () => {
 
     await emitEvent(jobId, 'info', 'CAPTCHA_GATE', `PAN accepted. Waiting for login OTP for PAN: ${pan?.slice(0,3)}***${pan?.slice(-2)}`);
 
-    const otp = await pollForOtp(jobId);
+    const otp = await pollForOtp(jobId, page);
     console.log('[Action] Entering login OTP');
 
     try {
-      const otpBoxes = await page.locator('input.otp-input, input[autocomplete="one-time-code"]').all();
-      if (otpBoxes.length > 0) {
-        for (let i = 0; i < otpBoxes.length && i < otp.length; i++) {
-          await otpBoxes[i].fill(otp[i]);
-          await sleep(100);
-        }
-      } else {
-        await safeFill(page.locator('input[formcontrolname="otp"]').first(), otp, 'Login OTP');
-      }
-      await safeClick(page.getByRole('button', { name: /validate|login|submit|continue/i }).first(), 'Submit login OTP');
+      await fillOtp(page, otp);
+      await clickValidateOtp(page, jobId);
       await sleep(4000);
     } catch (e) {
-      console.warn('[Warning] Login OTP entry failed:', e.message);
+      await emitEvent(jobId, 'warn', 'CAPTCHA_GATE', `[Bot Warning] Login OTP entry failed: ${e.message}`);
+      await unlockPageScroll(page).catch(() => {});
     }
 
     await emitEvent(jobId, 'info', 'SUCCESS', `✅ Login OTP entered. User is now logged in.`);
