@@ -35,19 +35,30 @@ export const handleWebhookEvent = async (req, res) => {
     });
 
     // Update the parent Job's phase so the Admin Dashboard table stays current
-    await Job.findByIdAndUpdate(jobId, { 
-        currentPhase: phase,
-        updatedAt: Date.now() 
-    });
+    // Update the parent Job's phase so the Admin Dashboard table stays current
+    // We MUST use upsert: true so that the Job document is actually created the first time the bot runs!
+    await Job.findByIdAndUpdate(
+      jobId, 
+      { 
+        $set: { status: phase, updatedAt: Date.now() },
+        $setOnInsert: { maskedPan: 'ABCDE1234F', createdAt: Date.now() }
+      },
+      { upsert: true, new: true }
+    );
 
     // Broadcast the event to any active SSE connections listening to this jobId
     liveStream.emit(`job-${jobId}`, newEvent);
 
     return res.status(200).json({ success: true });
   } catch (error) {
+    // 11000 is MongoDB's duplicate key error code
+    if (error.code === 11000) {
+      console.warn(`[Webhook] Duplicate event sequence ignored: ${jobId} seq ${seq}`);
+      return res.status(409).json({ error: 'Duplicate event sequence' });
+    }
+    
     console.error('[Webhook] Error ingesting event:', error);
-    // Fail-soft: Don't crash the server, just return 500
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Failed to process event' });
   }
 };
 

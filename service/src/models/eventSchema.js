@@ -41,14 +41,13 @@ eventSchema.index({ jobId: 1, seq: 1 }, { unique: true });
 
 // --- PII MASKING HOOK ---
 // Ensure secrets never get written to the database logs
-eventSchema.pre('save', function (next) {
+eventSchema.pre('save', async function () {
   if (this.message) {
     // Mask PANs (e.g., ABCDE1234F -> AXXXX1234X)
     this.message = this.message.replace(/[A-Z]{5}[0-9]{4}[A-Z]{1}/gi, 'XXXXX****X');
     // Mask OTPs (e.g., 6-digit numbers)
     this.message = this.message.replace(/\b\d{6}\b/g, '***XXX');
   }
-  next();
 });
 
 export default mongoose.model('Event', eventSchema);

@@ -22,6 +22,13 @@ app.use(express.json());
 app.use('/', eventRoutes);
 app.use('/', jobRoutes);
 
+// --- GLOBAL ERROR HANDLER ---
+// Captures any unhandled exceptions in routes or middleware and prevents server crashes
+app.use((err, req, res, next) => {
+  console.error('[Global Error Handler] Caught an unexpected error:', err.stack || err);
+  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+});
+
 // --- HEALTH CHECK ---
 // Useful for ensuring the server is running on deployment platforms like Render or AWS
 app.get('/health', (req, res) => {
