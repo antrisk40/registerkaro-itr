@@ -47,6 +47,9 @@ eventSchema.pre('save', async function () {
     this.message = this.message.replace(/[A-Z]{5}[0-9]{4}[A-Z]{1}/gi, 'XXXXX****X');
     // Mask OTPs (e.g., 6-digit numbers)
     this.message = this.message.replace(/\b\d{6}\b/g, '***XXX');
+    // Mask recovered passwords leaked into log messages
+    this.message = this.message.replace(/New Password:\s*\S+/gi, 'New Password: [REDACTED]');
+    this.message = this.message.replace(/Password recovered[^.]*\.\s*\S+/gi, 'Password recovered successfully.');
   }
 });
 

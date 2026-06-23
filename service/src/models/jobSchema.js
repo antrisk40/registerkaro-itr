@@ -44,6 +44,9 @@ const jobSchema = new mongoose.Schema(
     // Outcome message (success/failure details)
     outcomeMessage: { type: String, default: null },
 
+    // Password recovered via Forgot Password / Aadhaar OTP flow
+    recoveredPassword: { type: String, default: null },
+
     // PID of the spawned Playwright child process — used to stop the bot
     pid: { type: Number, default: null },
 
@@ -69,6 +72,7 @@ const jobSchema = new mongoose.Schema(
       area:              { type: String, default: '' },
       town:              { type: String, default: '' },
       state:             { type: String, default: '' },
+      aadhaarOtpChoice:  { type: String, default: '' }, // For account recovery options
     },
   },
   { timestamps: true }

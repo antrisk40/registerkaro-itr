@@ -8,6 +8,7 @@ import OtpInputForm from './OtpInputForm';
 import StopJobControl from './StopJobControl';
 import RestartJobControl from './RestartJobControl';
 import CorrectionForm from './CorrectionForm';
+import RecoveredPasswordCard from './RecoveredPasswordCard';
 import { formatJobDate } from '../../lib/jobs';
 import { useJobStatus } from '../../hooks/useJobStatus';
 
@@ -15,10 +16,11 @@ const INPUT_PHASES = ['OTP_GATE', 'CAPTCHA_GATE'];
 
 export default function JobDetailPanel({ job: initialJob }) {
   const [stopped, setStopped] = useState(false);
-  const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions } = useJobStatus(initialJob._id, initialJob.status);
+  const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword } = useJobStatus(initialJob._id, initialJob.status, initialJob);
 
   const needsInput = INPUT_PHASES.includes(status) && !isTerminal && !stopped;
   const latestOtpPrompt = logs.filter((l) => INPUT_PHASES.includes(l.phase)).at(-1);
+  const displayPassword = recoveredPassword || initialJob.recoveredPassword;
 
   return (
     <div className="space-y-6">
@@ -46,24 +48,35 @@ export default function JobDetailPanel({ job: initialJob }) {
       )}
 
       {status === 'CORRECTION_GATE' && !isTerminal && !stopped && (
-        <Card className="p-5 border-orange-500/40 bg-orange-500/10">
+        <Card className={`p-5 ${correctionField === 'aadhaarOtpChoice' ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-orange-500/40 bg-orange-500/10'}`}>
           <div className="flex items-center gap-3 mb-4">
-            <span className="text-2xl">⚠️</span>
+            <span className="text-2xl">{correctionField === 'aadhaarOtpChoice' ? '🔑' : '⚠️'}</span>
             <div>
-              <h3 className="text-lg font-bold text-orange-300">Correction Required</h3>
-              <p className="text-sm text-orange-200/80">
-                {correctionMessage || 'The portal rejected some registration details. Please correct them and resume.'}
+              <h3 className={`text-lg font-bold ${correctionField === 'aadhaarOtpChoice' ? 'text-indigo-300' : 'text-orange-300'}`}>
+                {correctionField === 'aadhaarOtpChoice' ? 'Action Required — Account Recovery' : 'Correction Required'}
+              </h3>
+              <p className={`text-sm ${correctionField === 'aadhaarOtpChoice' ? 'text-indigo-200/80' : 'text-orange-200/80'}`}>
+                {correctionMessage || (correctionField === 'aadhaarOtpChoice' ? 'Please select how to proceed with Aadhaar OTP.' : 'The portal rejected some registration details. Please correct them and resume.')}
               </p>
             </div>
           </div>
-          <CorrectionForm 
-            jobId={initialJob._id} 
-            initialPayload={initialJob.registrationPayload}
-            correctionMessage={correctionMessage}
-            correctionField={correctionField}
-            correctionOptions={correctionOptions}
-          />
+          {correctionField ? (
+            <CorrectionForm
+              key={correctionField}
+              jobId={initialJob._id} 
+              initialPayload={initialJob.registrationPayload}
+              correctionMessage={correctionMessage}
+              correctionField={correctionField}
+              correctionOptions={correctionOptions}
+            />
+          ) : (
+            <p className="text-sm text-slate-400 animate-pulse">Loading options from portal...</p>
+          )}
         </Card>
+      )}
+
+      {displayPassword && (
+        <RecoveredPasswordCard password={displayPassword} />
       )}
 
       <Card className="p-6">
@@ -101,7 +114,7 @@ export default function JobDetailPanel({ job: initialJob }) {
         <h3 className="text-sm font-semibold text-gray-300 mb-3">Live Console</h3>
         <JobConsole jobId={initialJob._id} logs={logs} error={error} stopped={stopped} />
 
-        {initialJob.outcomeMessage && (
+        {initialJob.outcomeMessage && !displayPassword && (
           <div className="mt-4 p-3 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-300">
             {initialJob.outcomeMessage}
           </div>

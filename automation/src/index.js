@@ -239,24 +239,81 @@ const fillOtp = async (page, otp) => {
   await blurActiveElement(page);
 };
 
-/** Click Validate once scroll is stable — no repeated isVisible polling */
-const clickValidateOtp = async (page, jobId) => {
-  await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Locating Validate/Submit button...');
-  await blurActiveElement(page);
-  await sleep(400);
+/** Detect income-tax redirect / disclaimer popup after first Validate click */
+const findRedirectPopup = async (page) => {
+  const patterns = [
+    /disclaimer/i,
+    /leaving e-filing portal/i,
+    /you are redirecting/i,
+    /redirecting/i,
+    /external link/i,
+    /leave the portal/i,
+  ];
 
-  // Dump all visible buttons to logs for debugging
-  const buttonDump = await page.evaluate(() => {
-    const btns = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
-    const matches = btns.filter(b => /validate|verify|submit|confirm|continue/i.test(b.textContent || ''));
-    return matches.map(b => ({
-      text: (b.textContent || '').trim().replace(/\s+/g, ' '),
-      tag: b.tagName,
-      disabled: b.disabled || b.hasAttribute('disabled')
-    }));
-  });
-  
-  await emitEvent(jobId, 'info', 'OTP_GATE', `[Bot Action] Found matching buttons: ${JSON.stringify(buttonDump)}`);
+  for (const pattern of patterns) {
+    try {
+      const modal = page.locator('mat-dialog-container, .modal.show, .modal-dialog, [role="dialog"][aria-modal="true"], [role="dialog"]')
+        .filter({ hasText: pattern }).first();
+      if (await modal.isVisible({ timeout: 400 })) return modal;
+    } catch { /* ignore */ }
+
+    try {
+      if (await page.getByText(pattern).first().isVisible({ timeout: 400 })) {
+        return page.locator('mat-dialog-container, .modal.show, .modal-dialog, [role="dialog"]').first();
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+};
+
+/** Wait briefly for redirect popup, click Cancel/No, return true if dismissed */
+const dismissRedirectPopup = async (page, jobId) => {
+  let modal = null;
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    modal = await findRedirectPopup(page);
+    if (modal) break;
+    await sleep(250);
+  }
+  if (!modal) return false;
+
+  await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Redirect popup detected — clicking Cancel...');
+
+  const cancelCandidates = [
+    modal.locator('button').filter({ hasText: /^Cancel$/i }),
+    modal.locator('button').filter({ hasText: /Cancel/i }),
+    modal.locator('button').filter({ hasText: /^No$/i }),
+    modal.locator('a, button').filter({ hasText: /Cancel/i }),
+    page.locator('.modal.show button, mat-dialog-container button').filter({ hasText: /Cancel/i }),
+    page.getByRole('button', { name: /^Cancel$/i }),
+    page.getByRole('button', { name: /Cancel/i }),
+  ];
+
+  for (const candidate of cancelCandidates) {
+    try {
+      const btn = candidate.first();
+      if (await btn.isVisible({ timeout: 600 })) {
+        await btn.click({ timeout: 3000, noWaitAfter: true });
+        await sleep(600);
+        // Confirm popup gone
+        if (!(await findRedirectPopup(page))) {
+          await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Redirect popup dismissed.');
+          return true;
+        }
+      }
+    } catch { /* try next */ }
+  }
+
+  // Last resort: Escape key
+  await page.keyboard.press('Escape');
+  await sleep(500);
+  return !(await findRedirectPopup(page));
+};
+
+/** Perform a single Validate/Submit click on the OTP form */
+const clickValidateButtonOnce = async (page, jobId) => {
+  await blurActiveElement(page);
+  await sleep(300);
 
   try {
     await page.waitForFunction(() => {
@@ -268,50 +325,53 @@ const clickValidateOtp = async (page, jobId) => {
       return target && !target.disabled && !target.hasAttribute('disabled');
     }, { timeout: 15000 });
   } catch {
-    await emitEvent(jobId, 'warn', 'OTP_GATE', '[Bot Warning] Validate button is still disabled or not found after 15s wait. Proceeding anyway.');
+    await emitEvent(jobId, 'warn', 'OTP_GATE', '[Bot Warning] Validate button still disabled — clicking anyway.');
   }
 
   const btnIndex = await page.evaluate(() => {
-    // 1. If there's an active modal (like otpVerifyModel), ONLY look inside the modal
     const activeModal = document.querySelector('.modal.show, [role="dialog"][aria-modal="true"]');
     const container = activeModal || document;
-
     const buttons = [...container.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
     const targetIndex = buttons.findIndex((b) => {
       const text = (b.textContent || '').trim().toLowerCase();
-      // Only match if the element's text is short and explicitly an action word
-      const isActionWord = /^(validate|verify|submit|confirm|continue)$/i.test(text);
-      return isActionWord && !b.disabled && !b.hasAttribute('disabled');
+      return /^(validate|verify|submit|confirm|continue)$/i.test(text) && !b.disabled && !b.hasAttribute('disabled');
     });
-    
     if (targetIndex !== -1) {
       buttons[targetIndex].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-      // We return the index relative to the entire document's list of buttons so our external JS click logic matches
       const allButtons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
       return allButtons.indexOf(buttons[targetIndex]);
     }
     return -1;
   });
 
-  await sleep(600);
+  await sleep(400);
 
-  try {
-    if (btnIndex === -1) {
-      // Fallback: Just click anything that matches via playwright
-      const fallbackBtn = page.locator('button:visible, a:visible, [role="button"]:visible')
-        .filter({ hasText: /validate|verify|submit|confirm|continue/i }).last();
-      await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Clicking fallback Validate/Submit button...');
-      await fallbackBtn.click({ timeout: 5000, noWaitAfter: true });
-    } else {
-      await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Executing JS click on located active button...');
-      await page.evaluate((idx) => {
-        const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
-        buttons[idx].click();
-      }, btnIndex);
-    }
-    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Successfully triggered Validate/Submit action');
-  } catch (e) {
-    await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] Click failed completely: ${e.message}`);
+  if (btnIndex === -1) {
+    const fallbackBtn = page.locator('button:visible, a:visible, [role="button"]:visible')
+      .filter({ hasText: /validate|verify|submit|confirm|continue/i }).last();
+    await fallbackBtn.click({ timeout: 5000, noWaitAfter: true });
+  } else {
+    await page.evaluate((idx) => {
+      const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      buttons[idx].click();
+    }, btnIndex);
+  }
+};
+
+/** Click Validate — dismiss redirect popup if it appears, then click Validate again immediately */
+const clickValidateOtp = async (page, jobId) => {
+  await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Clicking Validate (1st attempt)...');
+  await clickValidateButtonOnce(page, jobId);
+  await sleep(500);
+
+  const dismissed = await dismissRedirectPopup(page, jobId);
+  if (dismissed) {
+    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Clicking Validate again immediately...');
+    await sleep(400);
+    await clickValidateButtonOnce(page, jobId);
+    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Validate clicked after popup dismiss.');
+  } else {
+    await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Validate clicked (no redirect popup).');
   }
 
   await unlockPageScroll(page);
@@ -360,6 +420,172 @@ const safeFill = async (locator, value, label) => {
   }
 };
 
+/** Parse DOB into DD/MM/YYYY parts (portal expects Indian format) */
+const parseDob = (raw) => {
+  const s = String(raw).trim();
+  let d, m, y;
+
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (dmy) {
+    [, d, m, y] = dmy;
+  } else if (ymd) {
+    [, y, m, d] = ymd;
+  } else {
+    throw new Error(`Unrecognized DOB format "${raw}" — use DD/MM/YYYY`);
+  }
+
+  const day = String(parseInt(d, 10)).padStart(2, '0');
+  const month = String(parseInt(m, 10)).padStart(2, '0');
+  const year = String(parseInt(y, 10));
+
+  return {
+    day: parseInt(day, 10),
+    month: parseInt(month, 10),
+    year: parseInt(year, 10),
+    formatted: `${day}/${month}/${year}`,
+    digits: `${day}${month}${year}`,
+  };
+};
+
+const dobLooksFilled = async (locator, parsed) => {
+  const val = (await locator.inputValue().catch(() => '')).replace(/\s/g, '');
+  if (!val) return false;
+  return (
+    val === parsed.formatted ||
+    val.replace(/\D/g, '') === parsed.digits ||
+    (val.includes(String(parsed.year)) && val.replace(/\D/g, '').length >= 8)
+  );
+};
+
+/** Navigate Angular Material calendar to pick year → month → day */
+const pickDateFromMaterialCalendar = async (page, { day, month, year }) => {
+  const calendar = page.locator('mat-calendar, .mat-datepicker-content').first();
+  await calendar.waitFor({ state: 'visible', timeout: 5000 });
+
+  const periodBtn = page.locator('button.mat-calendar-period-button').first();
+  const monthLabels = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+  for (let i = 0; i < 4; i++) {
+    const yearCell = page.locator('.mat-calendar-body-cell-content').filter({ hasText: new RegExp(`^${year}$`) });
+    if (await yearCell.count() > 0) break;
+    if (await periodBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await periodBtn.click();
+      await sleep(400);
+    }
+  }
+
+  await page.locator('.mat-calendar-body-cell-content').filter({ hasText: new RegExp(`^${year}$`) }).first()
+    .click({ timeout: 5000 });
+  await sleep(400);
+
+  const monthShort = monthLabels[month - 1];
+  let monthCell = page.locator('.mat-calendar-body-cell-content').filter({ hasText: new RegExp(`^${monthShort}$`, 'i') });
+  if (await monthCell.count() === 0) {
+    monthCell = page.locator('.mat-calendar-body-cell-content').filter({ hasText: new RegExp(`^${month}$`) });
+  }
+  await monthCell.first().click({ timeout: 5000 });
+  await sleep(400);
+
+  await page.locator('.mat-calendar-body-cell:not(.mat-calendar-body-disabled) .mat-calendar-body-cell-content')
+    .filter({ hasText: new RegExp(`^${day}$`) }).first()
+    .click({ timeout: 5000 });
+};
+
+/** Fill Date of Birth on the income-tax portal (masked input + mat-datepicker) */
+const fillDateOfBirth = async (page, dobStr) => {
+  const parsed = parseDob(dobStr);
+  const dobInput = page.locator(
+    'input[formcontrolname="dateOfBirth"], input[placeholder*="DD/MM"], input[placeholder*="Date of Birth"], input[placeholder*="date"], input[aria-label*="DOB"], input[aria-label*="Birth"]'
+  ).first();
+
+  await dobInput.waitFor({ state: 'visible', timeout: 10000 });
+  await page.keyboard.press('Escape').catch(() => {});
+
+  const clearAndFocus = async () => {
+    await dobInput.click({ timeout: 5000, noWaitAfter: true });
+    await sleep(200);
+    await dobInput.evaluate((el) => {
+      el.removeAttribute('readonly');
+      el.focus();
+    });
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Backspace');
+    await sleep(150);
+  };
+
+  // Strategy 1: type 8 digits DDMMYYYY — input mask auto-inserts slashes
+  try {
+    await clearAndFocus();
+    await page.keyboard.type(parsed.digits, { delay: 130 });
+    await page.keyboard.press('Tab');
+    await sleep(500);
+    if (await dobLooksFilled(dobInput, parsed)) {
+      console.log(`[DOB] Filled via digits: ${parsed.formatted}`);
+      return;
+    }
+  } catch (e) {
+    console.warn('[DOB] Digit typing failed:', e.message);
+  }
+
+  // Strategy 2: type formatted DD/MM/YYYY including slashes
+  try {
+    await clearAndFocus();
+    await dobInput.pressSequentially(parsed.formatted, { delay: 130 });
+    await dispatchInputEvents(dobInput);
+    await page.keyboard.press('Tab');
+    await sleep(500);
+    if (await dobLooksFilled(dobInput, parsed)) {
+      console.log(`[DOB] Filled via formatted string: ${parsed.formatted}`);
+      return;
+    }
+  } catch (e) {
+    console.warn('[DOB] Formatted typing failed:', e.message);
+  }
+
+  // Strategy 3: open calendar picker and select date
+  try {
+    await page.keyboard.press('Escape').catch(() => {});
+    await dobInput.click();
+    await sleep(300);
+
+    const toggle = page.locator(
+      'mat-datepicker-toggle button, button[aria-label*="calendar" i], button[aria-label*="Choose date" i]'
+    ).first();
+
+    if (await toggle.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await toggle.click();
+      await sleep(600);
+      await pickDateFromMaterialCalendar(page, parsed);
+      await sleep(500);
+      if (await dobLooksFilled(dobInput, parsed)) {
+        console.log(`[DOB] Filled via calendar: ${parsed.formatted}`);
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('[DOB] Calendar picker failed:', e.message);
+  }
+
+  // Strategy 4: native value setter + Angular input events
+  try {
+    await dobInput.evaluate((el, { formatted }) => {
+      el.removeAttribute('readonly');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(el, formatted);
+      else el.value = formatted;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: formatted }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    }, { formatted: parsed.formatted });
+    await sleep(400);
+    console.log(`[DOB] Applied native setter fallback: ${parsed.formatted}`);
+  } catch (e) {
+    console.warn('[DOB] Native setter failed:', e.message);
+  }
+};
+
 /** Check if the portal is showing an OTP entry screen */
 const isOtpScreenVisible = async (page) => {
   const inputSelectors = [
@@ -397,28 +623,6 @@ const handleOtpGate = async (page, jobId, message) => {
       await fillOtp(page, otp);
       await sleep(500);
       await clickValidateOtp(page, jobId);
-
-      // Handle the annoying "leaving e-Filing Portal" external link popup
-      try {
-        const disclaimerModal = page.locator('mat-dialog-container, .modal-dialog, [role="dialog"]').filter({ hasText: /Disclaimer/i }).first();
-        const popupText = page.getByText(/leaving e-Filing Portal/i).first();
-        
-        if (await disclaimerModal.isVisible({ timeout: 2000 }) || await popupText.isVisible({ timeout: 500 })) {
-          await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Detected "Disclaimer" external link popup. Clicking Cancel...');
-          
-          // Try to click cancel within the modal first, fallback to any cancel button
-          let cancelBtn = disclaimerModal.locator('button').filter({ hasText: /Cancel/i }).first();
-          if (!(await cancelBtn.isVisible({ timeout: 500 }))) {
-             cancelBtn = page.locator('button').filter({ hasText: /Cancel/i }).first();
-          }
-          
-          await cancelBtn.click({ timeout: 2000 });
-          await sleep(1500);
-          
-          await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Resubmitting Validate OTP immediately...');
-          await clickValidateOtp(page, jobId);
-        }
-      } catch (e) { /* ignore */ }
 
     } catch (e) {
       await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] OTP entry/validate failed: ${e.message}`);
@@ -494,6 +698,222 @@ const getErrorBanner = async (page) => {
   return null;
 };
 
+// ─── Forgot Password Flow ───────────────────────────────────────────────────────
+
+const generateSecurePassword = () => {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+  const specialChars = '!@#$%^&*';
+  const upperCase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const lowerCase = 'abcdefghijklmnopqrstuvwxyz';
+  const numbers = '0123456789';
+
+  let pwd = '';
+  pwd += upperCase[Math.floor(Math.random() * upperCase.length)];
+  pwd += lowerCase[Math.floor(Math.random() * lowerCase.length)];
+  pwd += numbers[Math.floor(Math.random() * numbers.length)];
+  pwd += specialChars[Math.floor(Math.random() * specialChars.length)];
+
+  for (let i = 0; i < 10; i++) {
+    pwd += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return pwd.split('').sort(() => Math.random() - 0.5).join('');
+};
+
+const saveRecoveredPassword = async (jobId, password) => {
+  await axios.post(`${API_URL}/jobs/${jobId}`, {
+    status: 'SUCCESS',
+    outcomeMessage: 'Password recovered successfully via Aadhaar OTP.',
+    recoveredPassword: password,
+    suppliedOtp: null,
+    lastOtpError: null,
+  }).catch((err) => {
+    console.error('[Recovery] Failed to save password to DB:', err.message);
+  });
+};
+
+const fillPasswordField = async (locator, password) => {
+  await locator.click({ timeout: 5000 });
+  await locator.fill('');
+  await locator.pressSequentially(password, { delay: 80 });
+  await dispatchInputEvents(locator);
+};
+
+const runForgotPasswordFlow = async (page, browser, pan, jobId) => {
+  try {
+    await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', 'PAN already registered — pivoting to Forgot Password recovery...');
+
+    // Instead of forcing a URL change (which the portal blocks if you are mid-login), click the Forgot Password link!
+    const forgotPwdLink = page.getByRole('link', { name: /Forgot Password/i }).first();
+    if (await forgotPwdLink.isVisible({ timeout: 5000 })) {
+       await safeClick(forgotPwdLink, 'Forgot Password Link');
+       await sleep(3000);
+    } else {
+       await page.goto('https://eportal.incometax.gov.in/iec/foservices/#/pre-login/forgot-password', {
+         timeout: 0, waitUntil: 'domcontentloaded',
+       });
+       await sleep(2500);
+    }
+
+    // Identity gate — enter PAN (if we clicked the link, the PAN might already be pre-filled, so we check first)
+    await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', 'Verifying PAN on Forgot Password screen...');
+    
+    // Broadened selector to catch "userId", "pan", or placeholder text
+    const panInput = page.locator('input[formcontrolname*="pan" i], input[formcontrolname*="user" i], input[id*="pan" i], input[id*="user" i], input[placeholder*="User ID" i], input[placeholder*="PAN" i]').first();
+    
+    await panInput.waitFor({ state: 'visible', timeout: 20000 });
+    
+    const currentPanValue = await panInput.inputValue();
+    if (!currentPanValue || currentPanValue.toUpperCase() !== pan.toUpperCase()) {
+       await safeFill(panInput, pan, 'PAN for recovery');
+       await sleep(500);
+       await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue (Recovery PAN)');
+       await sleep(4000);
+    } else {
+       console.log('[Recovery] PAN already pre-filled. Clicking Continue.');
+       await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue (Recovery PAN)');
+       await sleep(4000);
+    }
+
+    // Select Aadhaar OTP recovery method
+    await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', 'Selecting "OTP on mobile registered with Aadhaar"...');
+    const aadhaarRadio = page.locator('mat-radio-button, [role="radio"]').filter({
+      hasText: /OTP on mobile number registered with Aadhaar|Aadhaar OTP|mobile.*Aadhaar/i,
+    }).first();
+    await aadhaarRadio.click({ timeout: 8000 });
+    await sleep(1000);
+    await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue (Recovery Method)');
+    await sleep(3000);
+
+    // Generate OTP confirmation screen (Ask user for preference)
+    try {
+      // Dynamically fetch all radio button options from the page
+      const radioButtons = page.locator('mat-radio-button, [role="radio"]');
+      const radioCount = await radioButtons.count();
+      
+      await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', `[Debug] Found ${radioCount} radio buttons on page`);
+      
+      if (radioCount > 0) {
+        // Extract the text labels from all visible radio buttons
+        const options = await page.evaluate(() => {
+          const radios = document.querySelectorAll('mat-radio-button, [role="radio"]');
+          const labels = [];
+          radios.forEach(radio => {
+            // Try to get the label text more precisely
+            const label = radio.querySelector('.mat-radio-label-content, .mdc-radio__label, label');
+            const text = label ? label.textContent?.trim() : radio.textContent?.trim();
+            // Filter out empty or very short text
+            if (text && text.length > 3) {
+              labels.push(text);
+            }
+          });
+          return labels;
+        });
+
+        await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', `[Debug] Extracted options: ${JSON.stringify(options)}`);
+
+        if (options.length > 0) {
+          await emitEvent(jobId, 'warn', 'CORRECTION_GATE', 'Aadhaar OTP required. Do you want to generate a new OTP or use an existing one?');
+          await axios.patch(`${API_URL}/jobs/${jobId}`, {
+            status: 'CORRECTION_GATE',
+            correctionMessage: 'Please select how you want to proceed with the Aadhaar OTP.',
+            correctionField: 'aadhaarOtpChoice',
+            correctionOptions: options
+          }).catch(() => {});
+
+          // Poll for user choice
+          let userChoice = null;
+          while (true) {
+            const { data: jobInfo } = await axios.get(`${API_URL}/jobs/${jobId}`);
+            userChoice = jobInfo?.job?.registrationPayload?.aadhaarOtpChoice;
+            if (userChoice) {
+              console.log(`[Action] Received Aadhaar OTP choice: ${userChoice}`);
+              await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', `User selected: ${userChoice}`);
+              
+              // Clear the correction gate state
+              await axios.patch(`${API_URL}/jobs/${jobId}`, {
+                status: 'ACCOUNT_RECOVERY',
+                correctionField: null,
+                correctionOptions: null,
+                correctionMessage: null
+              }).catch(() => {});
+              break;
+            }
+            await sleep(5000);
+          }
+
+          // Click the chosen radio button by matching the text
+          const selectedRadio = radioButtons.filter({ hasText: userChoice }).first();
+          await selectedRadio.click({ timeout: 8000 });
+          
+          await sleep(800);
+          await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue (Generate OTP Choice)');
+          await sleep(3000);
+        }
+      }
+    } catch { /* optional step */ }
+
+    // UIDAI consent — checkbox + Yes / Generate Aadhaar OTP
+    try {
+      const checkbox = page.getByRole('checkbox').first();
+      if (await checkbox.isVisible({ timeout: 4000 })) {
+        await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', 'Accepting UIDAI consent...');
+        await checkbox.check({ timeout: 5000 });
+        await sleep(500);
+
+        const generateBtn = page.getByRole('button', { name: /Generate Aadhaar OTP/i }).first();
+        const yesBtn = page.getByRole('button', { name: /^Yes$/i }).first();
+
+        if (await generateBtn.isVisible({ timeout: 1500 })) {
+          await safeClick(generateBtn, 'Generate Aadhaar OTP');
+        } else if (await yesBtn.isVisible({ timeout: 1500 })) {
+          await safeClick(yesBtn, 'UIDAI Yes');
+        }
+        await sleep(3000);
+      }
+    } catch { /* optional UIDAI popup */ }
+
+    // OTP gate — same dashboard flow as registration
+    await handleOtpGate(page, jobId, 'Aadhaar OTP required for password reset. Enter it on the dashboard.');
+
+    // New password screen
+    await emitEvent(jobId, 'info', 'ACCOUNT_RECOVERY', 'OTP accepted — setting new secure password...');
+    await sleep(2000);
+
+    const newPassword = generateSecurePassword();
+    const newPwdInput = page.locator('input[formcontrolname="password"], input[type="password"]').first();
+    const confirmPwdInput = page.locator('input[formcontrolname="confirmPassword"], input[formcontrolname="reenterPassword"], input[type="password"]').nth(1);
+
+    await newPwdInput.waitFor({ state: 'visible', timeout: 15000 });
+    await fillPasswordField(newPwdInput, newPassword);
+    await sleep(400);
+    await fillPasswordField(confirmPwdInput, newPassword);
+    await sleep(800);
+
+    await safeClick(
+      page.getByRole('button', { name: /Submit|Continue|Reset|Update/i }).first(),
+      'Submit Password'
+    );
+    await sleep(5000);
+
+    // Verify success screen
+    const successVisible = await page.getByText(/updated successfully|password.*updated|reset successfully|successfully updated/i)
+      .first().isVisible({ timeout: 8000 }).catch(() => false);
+
+    if (successVisible) {
+      await saveRecoveredPassword(jobId, newPassword);
+      await emitEvent(jobId, 'info', 'SUCCESS', 'Password recovered successfully! View the new password on your dashboard.');
+      console.log(`[Recovery] Password saved for job ${jobId}`);
+    } else {
+      await emitEvent(jobId, 'error', 'FAILED', 'Could not confirm password update success screen.');
+    }
+  } catch (e) {
+    await emitEvent(jobId, 'error', 'FAILED', `Forgot Password flow failed: ${e.message}`);
+  } finally {
+    await sleep(5000);
+    try { await browser.close(); } catch { /* already closed */ }
+  }
+};
+
 // ─── Main Bot ─────────────────────────────────────────────────────────────────
 
 const runBot = async () => {
@@ -546,20 +966,38 @@ const runBot = async () => {
     await sleep(500);
     await safeClick(page.locator('button.large-button-primary').first(), 'Continue');
 
-    // ── DETECT: PAN ALREADY REGISTERED ───────────────────────────────────────
+    // ── DETECT IF PAN EXISTS ──────────────────────────────────────────────────
+    let isRegistered = false;
     try {
-      const alreadyReg = page.getByText('PAN already registered', { exact: false });
-      await alreadyReg.waitFor({ state: 'visible', timeout: 3000 });
+      // If the PAN is valid, the portal will route from /login to /login/password
+      await page.waitForURL('**/login/password', { timeout: 10000 });
+      isRegistered = true;
+    } catch {
+      console.log('[Warning] Did not transition to /login/password. Checking for invalid PAN error...');
+      
+      try {
+         // Maybe the password box appeared without a URL change?
+         const passwordInput = page.locator('input[type="password"], input[formcontrolname="loginPassword"]').first();
+         if (await passwordInput.isVisible({ timeout: 2000 })) {
+             isRegistered = true;
+         }
+      } catch { /* ignore */ }
+    }
+
+    if (isRegistered) {
       await emitEvent(jobId, 'warn', 'ALREADY_EXISTS', `PAN ${pan} is already registered on the portal.`);
-      await sleep(10000);
-      await browser.close();
+      
+      // Pivot to Forgot Password recovery flow
+      await runForgotPasswordFlow(page, browser, pan, jobId);
       return;
-    } catch { /* not registered — good, continue */ }
+    }
 
     // ── DETECT: PAN DOES NOT EXIST → REGISTRATION FLOW ───────────────────────
     try {
-      const noExist = page.getByText('PAN does not exist', { exact: false });
-      await noExist.waitFor({ state: 'visible', timeout: 5000 });
+      const noExist = page.getByText(/PAN does not exist/i, { exact: false });
+      if (await noExist.isVisible({ timeout: 1000 })) {
+        console.log('[Phase] PAN not found on login screen.');
+      }
 
       console.log(`[Phase] PAN not found. Starting ${isOthers ? 'Others' : 'Taxpayer'} registration...`);
       await emitEvent(jobId, 'warn', 'REGISTERING', `PAN not found. Starting registration as ${category}`);
@@ -665,72 +1103,11 @@ const runBot = async () => {
         await sleep(400);
       }
 
-      console.log(`[Action] Selecting Date of Birth via Calendar: ${regData.dateOfBirth}`);
+      console.log(`[Action] Setting Date of Birth: ${regData.dateOfBirth}`);
       try {
-        const [day, month, year] = regData.dateOfBirth.split('/');
-        
-        // 1. Click the calendar toggle button
-        const datePickerToggle = page.locator('mat-datepicker-toggle button').first();
-        await safeClick(datePickerToggle, 'Calendar Toggle');
-        await sleep(1000);
-
-        // 2. Click the Year/Month dropdown button at the top of the calendar
-        const periodButton = page.locator('button.mat-calendar-period-button').first();
-        if (await periodButton.isVisible({ timeout: 1000 })) {
-           await safeClick(periodButton, 'Calendar Period View');
-           await sleep(500);
-        }
-
-        // 3. Select the Year using exact text match
-        let yearFound = false;
-        for (let i = 0; i < 5; i++) {
-          const yearCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${year}\\s*$`) }).first();
-          if (await yearCell.isVisible({ timeout: 1000 })) {
-            await safeClick(yearCell, `Year ${year}`);
-            yearFound = true;
-            break;
-          }
-          // Click previous 24-years button
-          const prevBtn = page.locator('button.mat-calendar-previous-button').first();
-          if (await prevBtn.isVisible()) await safeClick(prevBtn, 'Calendar Previous Years');
-          await sleep(500);
-        }
-
-        if (yearFound) {
-          await sleep(500);
-          // 4. Select the Month using exact text match
-          const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-          const monthStr = monthNames[parseInt(month, 10) - 1];
-          const monthCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${monthStr}\\s*$`, 'i') }).first();
-          
-          if (await monthCell.isVisible({ timeout: 1000 })) {
-             await safeClick(monthCell, `Month ${monthStr}`);
-             await sleep(500);
-          } else {
-             // Fallback for full month names if portal uses them
-             const fullMonths = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-             const fullMonthStr = fullMonths[parseInt(month, 10) - 1];
-             const fullMonthCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${fullMonthStr}\\s*$`, 'i') }).first();
-             await safeClick(fullMonthCell, `Month ${fullMonthStr}`);
-             await sleep(500);
-          }
-
-          // 5. Select the Day using exact text match
-          const dayCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${parseInt(day, 10)}\\s*$`) }).first();
-          await safeClick(dayCell, `Day ${day}`);
-          await sleep(600);
-        } else {
-          throw new Error('Year not found');
-        }
-      } catch (e) { 
-        console.warn('[Warning] Calendar automation failed, falling back to direct typing:', e.message); 
-        // Fallback: Remove readonly and simulate typing
-        const dobInput = page.locator('input[formcontrolname="dateOfBirth"]').first();
-        await dobInput.evaluate(node => node.removeAttribute('readonly'));
-        await dobInput.fill('');
-        await dobInput.type(regData.dateOfBirth, { delay: 100 });
-        await page.keyboard.press('Tab');
-        await sleep(500);
+        await fillDateOfBirth(page, regData.dateOfBirth);
+      } catch (e) {
+        console.warn('[Warning] Date of Birth fill failed:', e.message);
       }
 
       // Gender radio
@@ -1020,5 +1397,28 @@ const runBot = async () => {
 
 runBot().catch(async (err) => {
   console.error('[Fatal]', err);
+  
+  const jobId = process.env.JOB_ID || process.env.DUMMY_JOB_ID;
+  const isContextError = err.message.includes('Execution context was destroyed') || 
+                         err.message.includes('Target closed') || 
+                         err.message.includes('navigated');
+
+  if (jobId) {
+    if (isContextError) {
+      await emitEvent(jobId, 'error', 'FAILED', 'Bot crashed: The page was reloaded or the portal disconnected unexpectedly, destroying the execution context. Please restart the job.');
+      // Update job status to FAILED
+      await axios.patch(`${process.env.API_URL}/jobs/${jobId}`, {
+        status: 'FAILED',
+        outcomeMessage: 'Execution context destroyed due to unexpected page reload.'
+      }).catch(() => {});
+    } else {
+      await emitEvent(jobId, 'error', 'FAILED', `Bot crashed fatally: ${err.message}`);
+      await axios.patch(`${process.env.API_URL}/jobs/${jobId}`, {
+        status: 'FAILED',
+        outcomeMessage: `Fatal crash: ${err.message}`
+      }).catch(() => {});
+    }
+  }
+
   process.exit(1);
 });

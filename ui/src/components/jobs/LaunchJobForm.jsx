@@ -58,7 +58,8 @@ export default function LaunchJobForm() {
         body: JSON.stringify({
           pan, isOthers, category,
           lastName, middleName, firstName,
-          dateOfBirth, gender, residentialStatus,
+          dateOfBirth: dateOfBirth ? dateOfBirth.split('-').reverse().join('/') : '',
+          gender, residentialStatus,
           email, emailBelongsTo, mobile, mobileBelongsTo,
           country, flat, road, pincode, postOffice, area, town, state
         }),
@@ -147,13 +148,12 @@ export default function LaunchJobForm() {
                 <Input type="text" value={middleName} onChange={(e) => setMiddleName(e.target.value.toUpperCase())} />
               </Field>
 
-              <Field label="Date of Birth * (DD/MM/YYYY)">
+              <Field label="Date of Birth *">
                 <Input
-                  type="text"
+                  type="date"
                   value={dateOfBirth}
                   onChange={(e) => setDateOfBirth(e.target.value)}
-                  placeholder="01/01/1990"
-                  maxLength={10}
+                  required
                 />
               </Field>
 

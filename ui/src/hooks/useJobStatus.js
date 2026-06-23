@@ -9,13 +9,14 @@ const VALID_PHASES = new Set([
   'ALREADY_EXISTS', 'SUCCESS', 'FAILED',
 ]);
 
-export function useJobStatus(jobId, initialStatus) {
+export function useJobStatus(jobId, initialStatus, initialJob = {}) {
   const { logs, error } = useSSEStream(jobId);
   const [polledStatus, setPolledStatus] = useState(initialStatus);
-  const [lastOtpError, setLastOtpError] = useState(null);
-  const [correctionMessage, setCorrectionMessage] = useState(null);
-  const [correctionField, setCorrectionField] = useState(null);
-  const [correctionOptions, setCorrectionOptions] = useState(null);
+  const [lastOtpError, setLastOtpError] = useState(initialJob.lastOtpError || null);
+  const [correctionMessage, setCorrectionMessage] = useState(initialJob.correctionMessage || null);
+  const [correctionField, setCorrectionField] = useState(initialJob.correctionField || null);
+  const [correctionOptions, setCorrectionOptions] = useState(initialJob.correctionOptions || null);
+  const [recoveredPassword, setRecoveredPassword] = useState(initialJob.recoveredPassword || null);
 
   const phaseFromLogs = useMemo(() => {
     for (let i = logs.length - 1; i >= 0; i--) {
@@ -32,7 +33,7 @@ export function useJobStatus(jobId, initialStatus) {
   }, [initialStatus, jobId]);
 
   useEffect(() => {
-    if (!jobId || isTerminal) return;
+    if (!jobId) return;
 
     const poll = async () => {
       try {
@@ -52,13 +53,17 @@ export function useJobStatus(jobId, initialStatus) {
         if (data.job?.correctionOptions !== undefined) {
           setCorrectionOptions(data.job.correctionOptions || null);
         }
+        if (data.job?.recoveredPassword) {
+          setRecoveredPassword(data.job.recoveredPassword);
+        }
       } catch { /* ignore */ }
     };
 
     poll();
-    const id = setInterval(poll, 2000);
+    const intervalMs = isTerminal ? 5000 : 2000;
+    const id = setInterval(poll, intervalMs);
     return () => clearInterval(id);
   }, [jobId, isTerminal]);
 
-  return { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions };
+  return { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword };
 }
