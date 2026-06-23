@@ -261,8 +261,10 @@ const clickValidateOtp = async (page, jobId) => {
   try {
     await page.waitForFunction(() => {
       const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
-      // Exclude "Back" or "Cancel" just in case they have weird text
-      const target = buttons.find((b) => /validate|verify|submit|confirm|continue/i.test(b.textContent || '') && !/cancel/i.test(b.textContent || ''));
+      const target = buttons.find((b) => {
+        const t = (b.textContent || '').trim().toLowerCase();
+        return /^(validate|verify|submit|confirm|continue)$/i.test(t);
+      });
       return target && !target.disabled && !target.hasAttribute('disabled');
     }, { timeout: 15000 });
   } catch {
@@ -270,16 +272,25 @@ const clickValidateOtp = async (page, jobId) => {
   }
 
   const btnIndex = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+    // 1. If there's an active modal (like otpVerifyModel), ONLY look inside the modal
+    const activeModal = document.querySelector('.modal.show, [role="dialog"][aria-modal="true"]');
+    const container = activeModal || document;
+
+    const buttons = [...container.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
     const targetIndex = buttons.findIndex((b) => {
-      const text = b.textContent || '';
-      return /validate|verify|submit|confirm|continue/i.test(text) && !/cancel/i.test(text) && !b.disabled && !b.hasAttribute('disabled');
+      const text = (b.textContent || '').trim().toLowerCase();
+      // Only match if the element's text is short and explicitly an action word
+      const isActionWord = /^(validate|verify|submit|confirm|continue)$/i.test(text);
+      return isActionWord && !b.disabled && !b.hasAttribute('disabled');
     });
     
     if (targetIndex !== -1) {
       buttons[targetIndex].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      // We return the index relative to the entire document's list of buttons so our external JS click logic matches
+      const allButtons = [...document.querySelectorAll('button, a, [role="button"]')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      return allButtons.indexOf(buttons[targetIndex]);
     }
-    return targetIndex;
+    return -1;
   });
 
   await sleep(600);
@@ -311,6 +322,25 @@ const setOtpError = async (jobId, message) => {
     suppliedOtp: null,
     lastOtpError: message,
   }).catch(() => {});
+};
+
+/** Wait for user to submit a correction in the dashboard */
+const pollForCorrection = async (jobId, page) => {
+  console.log(`[Polling] Waiting for user correction on dashboard for job ${jobId}...`);
+  while (true) {
+    if (page.isClosed()) throw new Error('Page closed during correction wait');
+    
+    try {
+      const res = await axios.get(`${API_URL}/jobs/${jobId}`);
+      if (res.data.job && res.data.job.status === 'REGISTERING' && !res.data.job.correctionMessage) {
+        // The user submitted the correction and resumed the job
+        return res.data.job.registrationPayload;
+      }
+    } catch (e) {
+      console.warn('[Polling Error] Could not check correction status:', e.message);
+    }
+    await new Promise(r => setTimeout(r, 3000));
+  }
 };
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -367,6 +397,29 @@ const handleOtpGate = async (page, jobId, message) => {
       await fillOtp(page, otp);
       await sleep(500);
       await clickValidateOtp(page, jobId);
+
+      // Handle the annoying "leaving e-Filing Portal" external link popup
+      try {
+        const disclaimerModal = page.locator('mat-dialog-container, .modal-dialog, [role="dialog"]').filter({ hasText: /Disclaimer/i }).first();
+        const popupText = page.getByText(/leaving e-Filing Portal/i).first();
+        
+        if (await disclaimerModal.isVisible({ timeout: 2000 }) || await popupText.isVisible({ timeout: 500 })) {
+          await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Detected "Disclaimer" external link popup. Clicking Cancel...');
+          
+          // Try to click cancel within the modal first, fallback to any cancel button
+          let cancelBtn = disclaimerModal.locator('button').filter({ hasText: /Cancel/i }).first();
+          if (!(await cancelBtn.isVisible({ timeout: 500 }))) {
+             cancelBtn = page.locator('button').filter({ hasText: /Cancel/i }).first();
+          }
+          
+          await cancelBtn.click({ timeout: 2000 });
+          await sleep(1500);
+          
+          await emitEvent(jobId, 'info', 'OTP_GATE', '[Bot Action] Resubmitting Validate OTP immediately...');
+          await clickValidateOtp(page, jobId);
+        }
+      } catch (e) { /* ignore */ }
+
     } catch (e) {
       await emitEvent(jobId, 'warn', 'OTP_GATE', `[Bot Warning] OTP entry/validate failed: ${e.message}`);
       await unlockPageScroll(page).catch(() => {});
@@ -452,7 +505,7 @@ const runBot = async () => {
   const category = TAXPAYER_CATEGORY || 'Individual';
 
   // Registration form data
-  const regData = {
+  let regData = {
     lastName:          REG_LAST_NAME     || 'DOE',
     middleName:        REG_MIDDLE_NAME   || '',
     firstName:         REG_FIRST_NAME    || 'JOHN',
@@ -460,7 +513,17 @@ const runBot = async () => {
     gender:            REG_GENDER        || 'Male',
     residentialStatus: REG_RESIDENTIAL   || 'Resident',
     email:             REG_EMAIL         || '',
+    emailBelongsTo:    process.env.REG_EMAIL_BELONGS  || 'Self',
     mobile:            REG_MOBILE        || '',
+    mobileBelongsTo:   process.env.REG_MOBILE_BELONGS || 'Self',
+    country:           process.env.REG_COUNTRY        || 'India',
+    flat:              process.env.REG_FLAT           || '',
+    road:              process.env.REG_ROAD           || '',
+    pincode:           process.env.REG_PINCODE        || '',
+    postOffice:        process.env.REG_POST_OFFICE    || '',
+    area:              process.env.REG_AREA           || '',
+    town:              process.env.REG_TOWN           || '',
+    state:             process.env.REG_STATE          || '',
   };
 
   if (!pan) { console.error('No PAN provided.'); process.exit(1); }
@@ -581,6 +644,8 @@ const runBot = async () => {
       //  BASIC DETAILS TAB
       // ═══════════════════════════════════════════════════════════════════
       if (!(await isOtpScreenVisible(page))) {
+      let basicFilledSuccessfully = false;
+      while (!basicFilledSuccessfully && !(await isOtpScreenVisible(page))) {
       await emitEvent(jobId, 'info', 'BASIC_DETAILS', 'Filling in Basic Details...');
       await sleep(2000);
 
@@ -600,18 +665,73 @@ const runBot = async () => {
         await sleep(400);
       }
 
-      // Date of Birth — The portal uses a date picker.
-      // We type directly into the mat-datepicker input.
-      console.log(`[Action] Filling Date of Birth: ${regData.dateOfBirth}`);
+      console.log(`[Action] Selecting Date of Birth via Calendar: ${regData.dateOfBirth}`);
       try {
-        const dobInput = page.locator('input[formcontrolname="dateOfBirth"], input[placeholder*="date"], input[aria-label*="DOB"], input[placeholder*="Date"]').first();
-        await dobInput.click({ timeout: 5000 });
-        await sleep(300);
-        await dobInput.fill(regData.dateOfBirth, { timeout: 5000 });
-        // Press Tab to commit the date (Angular datepicker requires this)
+        const [day, month, year] = regData.dateOfBirth.split('/');
+        
+        // 1. Click the calendar toggle button
+        const datePickerToggle = page.locator('mat-datepicker-toggle button').first();
+        await safeClick(datePickerToggle, 'Calendar Toggle');
+        await sleep(1000);
+
+        // 2. Click the Year/Month dropdown button at the top of the calendar
+        const periodButton = page.locator('button.mat-calendar-period-button').first();
+        if (await periodButton.isVisible({ timeout: 1000 })) {
+           await safeClick(periodButton, 'Calendar Period View');
+           await sleep(500);
+        }
+
+        // 3. Select the Year using exact text match
+        let yearFound = false;
+        for (let i = 0; i < 5; i++) {
+          const yearCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${year}\\s*$`) }).first();
+          if (await yearCell.isVisible({ timeout: 1000 })) {
+            await safeClick(yearCell, `Year ${year}`);
+            yearFound = true;
+            break;
+          }
+          // Click previous 24-years button
+          const prevBtn = page.locator('button.mat-calendar-previous-button').first();
+          if (await prevBtn.isVisible()) await safeClick(prevBtn, 'Calendar Previous Years');
+          await sleep(500);
+        }
+
+        if (yearFound) {
+          await sleep(500);
+          // 4. Select the Month using exact text match
+          const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+          const monthStr = monthNames[parseInt(month, 10) - 1];
+          const monthCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${monthStr}\\s*$`, 'i') }).first();
+          
+          if (await monthCell.isVisible({ timeout: 1000 })) {
+             await safeClick(monthCell, `Month ${monthStr}`);
+             await sleep(500);
+          } else {
+             // Fallback for full month names if portal uses them
+             const fullMonths = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+             const fullMonthStr = fullMonths[parseInt(month, 10) - 1];
+             const fullMonthCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${fullMonthStr}\\s*$`, 'i') }).first();
+             await safeClick(fullMonthCell, `Month ${fullMonthStr}`);
+             await sleep(500);
+          }
+
+          // 5. Select the Day using exact text match
+          const dayCell = page.locator(`td.mat-calendar-body-cell`).filter({ hasText: new RegExp(`^\\s*${parseInt(day, 10)}\\s*$`) }).first();
+          await safeClick(dayCell, `Day ${day}`);
+          await sleep(600);
+        } else {
+          throw new Error('Year not found');
+        }
+      } catch (e) { 
+        console.warn('[Warning] Calendar automation failed, falling back to direct typing:', e.message); 
+        // Fallback: Remove readonly and simulate typing
+        const dobInput = page.locator('input[formcontrolname="dateOfBirth"]').first();
+        await dobInput.evaluate(node => node.removeAttribute('readonly'));
+        await dobInput.fill('');
+        await dobInput.type(regData.dateOfBirth, { delay: 100 });
         await page.keyboard.press('Tab');
-        await sleep(600);
-      } catch (e) { console.warn('[Warning] Could not fill DOB:', e.message); }
+        await sleep(500);
+      }
 
       // Gender radio
       console.log(`[Action] Selecting Gender: ${regData.gender}`);
@@ -626,9 +746,19 @@ const runBot = async () => {
       // ── POST-BASIC_DETAILS ERROR CHECK ────────────────────────────────
       const basicErr = await getErrorBanner(page);
       if (basicErr) {
-        await emitEvent(jobId, 'error', 'FAILED', `Basic Details error: ${basicErr}`);
-        await sleep(30000); await browser.close(); return;
+        await emitEvent(jobId, 'warn', 'CORRECTION_GATE', `Basic Details error: ${basicErr}`);
+        await axios.post(`${API_URL}/jobs/${jobId}`, {
+          status: 'CORRECTION_GATE',
+          correctionMessage: basicErr
+        }).catch(() => {});
+
+        const newPayload = await pollForCorrection(jobId, page);
+        regData = { ...regData, ...newPayload };
+        await emitEvent(jobId, 'info', 'BASIC_DETAILS', 'Resuming with corrected Basic Details...');
+        continue;
       }
+
+      basicFilledSuccessfully = true;
 
       // Continue to next tab (skip if still on OTP screen)
       if (!(await isOtpScreenVisible(page))) {
@@ -636,49 +766,174 @@ const runBot = async () => {
         await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to Contact');
         await sleep(3000);
       }
-      } // end basic details block
+      } // end basic details while
+      } // end basic details if
 
       // ═══════════════════════════════════════════════════════════════════
       //  CONTACT DETAILS TAB
       // ═══════════════════════════════════════════════════════════════════
-      if (!(await isOtpScreenVisible(page))) {
-      await emitEvent(jobId, 'info', 'CONTACT_DETAILS', 'Filling in Contact Details...');
+      let contactFilledSuccessfully = false;
+      while (!contactFilledSuccessfully && !(await isOtpScreenVisible(page))) {
+        await emitEvent(jobId, 'info', 'CONTACT_DETAILS', 'Filling in Contact Details...');
 
-      if (regData.mobile) {
-        await safeFill(
-          page.locator('input[formcontrolname="mobile"], input[placeholder*="Mobile"], input[type="tel"]').first(),
-          regData.mobile, 'Mobile'
-        );
-        await sleep(400);
-      }
+        if (regData.mobile) {
+          await safeFill(
+            page.locator('input[formcontrolname="mobile"], input[placeholder*="Mobile"], input[type="tel"]').first(),
+            regData.mobile, 'Mobile'
+          );
+          await sleep(400);
+          
+          // Select Belongs To (Mobile)
+          try {
+            const dropdowns = await page.locator('mat-select').all();
+            if (dropdowns.length >= 1) {
+              await safeClick(dropdowns[0], 'Mobile Belongs To Dropdown');
+              await sleep(600);
+              await safeClick(page.locator('mat-option, .mat-mdc-option').filter({ hasText: new RegExp(regData.mobileBelongsTo, 'i') }).first(), `Mobile Belongs To: ${regData.mobileBelongsTo}`);
+              await sleep(400);
+            }
+          } catch (e) { console.warn('Could not select mobile belongs to:', e.message); }
+        }
 
-      if (regData.email) {
-        await safeFill(
-          page.locator('input[formcontrolname="email"], input[placeholder*="Email"], input[type="email"]').first(),
-          regData.email, 'Email'
-        );
-        await sleep(400);
-      }
+        if (regData.email) {
+          await safeFill(
+            page.locator('input[formcontrolname="email"], input[placeholder*="Email"], input[type="email"]').first(),
+            regData.email, 'Email'
+          );
+          await sleep(400);
 
-      // ── POST-CONTACT_DETAILS ERROR CHECK ──────────────────────────────
-      const contactErr = await getErrorBanner(page);
-      if (contactErr) {
-        await emitEvent(jobId, 'error', 'FAILED', `Contact Details error: ${contactErr}`);
-        await sleep(30000); await browser.close(); return;
-      }
+          // Select Belongs To (Email)
+          try {
+            const dropdowns = await page.locator('mat-select').all();
+            if (dropdowns.length >= 2) {
+              await safeClick(dropdowns[1], 'Email Belongs To Dropdown');
+              await sleep(600);
+              await safeClick(page.locator('mat-option, .mat-mdc-option').filter({ hasText: new RegExp(regData.emailBelongsTo, 'i') }).first(), `Email Belongs To: ${regData.emailBelongsTo}`);
+              await sleep(400);
+            }
+          } catch (e) { console.warn('Could not select email belongs to:', e.message); }
+        }
 
-      // Continue — OTP may appear after contact details
-      if (!(await isOtpScreenVisible(page))) {
-        console.log('[Action] Clicking Continue to OTP verification');
-        await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to OTP');
-        await sleep(4000);
-      }
+        // Postal Address
+        try {
+          if (regData.country && regData.country !== 'India') {
+            const dropdowns = await page.locator('mat-select').all();
+            if (dropdowns.length >= 3) {
+              await safeClick(dropdowns[2], 'Country Dropdown');
+              await sleep(600);
+              await safeClick(page.locator('mat-option, .mat-mdc-option').filter({ hasText: new RegExp(regData.country, 'i') }).first(), `Country: ${regData.country}`);
+              await sleep(400);
+            }
+          }
+          if (regData.flat) await safeFill(page.locator('input[formcontrolname="flat"], input[placeholder*="Flat"]').first(), regData.flat, 'Flat');
+          if (regData.road) await safeFill(page.locator('input[formcontrolname="road"], input[placeholder*="Road"]').first(), regData.road, 'Road');
+          
+          if (regData.pincode) {
+            const pinInput = page.locator('input[formcontrolname="pincode"], input[placeholder*="Pincode"]').first();
+            await pinInput.fill(regData.pincode);
+            await page.keyboard.press('Tab'); // Trigger auto-fetch of Post Office/State
+            await sleep(3000); // Wait for portal API to fetch Post Offices
+          }
+
+          // Helper to handle fields that could be either a text input or a dropdown (mat-select)
+          const fillOrSelect = async (fieldName, value) => {
+            if (!value) return;
+            const selectLoc = page.locator(`mat-select[formcontrolname="${fieldName}"], mat-select[placeholder*="${fieldName}"]`).first();
+            const inputLoc = page.locator(`input[formcontrolname="${fieldName}"], input[placeholder*="${fieldName}"]`).first();
+            
+            if (await selectLoc.isVisible({ timeout: 1000 })) {
+              await safeClick(selectLoc, `${fieldName} Dropdown`);
+              await sleep(1000);
+              
+              // Try exact match first
+              let optionLoc = page.locator('mat-option, .mat-mdc-option').filter({ hasText: new RegExp(`^\\s*${value}\\s*$`, 'i') });
+              let count = await optionLoc.count();
+              
+              if (count === 0) {
+                // Fallback to partial match
+                optionLoc = page.locator('mat-option, .mat-mdc-option').filter({ hasText: new RegExp(value, 'i') });
+                count = await optionLoc.count();
+                
+                if (count > 1) {
+                  const texts = await optionLoc.allTextContents();
+                  const cleanedTexts = texts.map(t => t.trim()).slice(0, 5); // Array of strings
+                  // Throw a special error that the outer block will catch and use for CORRECTION_GATE
+                  const userMsg = `Exact match not found for ${fieldName} "${value}". Please select the correct option.`;
+                  throw new Error(`AMBIGUOUS_MATCH|${fieldName}|${userMsg}|${JSON.stringify(cleanedTexts)}`);
+                }
+              }
+              
+              if (count > 0) {
+                await safeClick(optionLoc.first(), `${fieldName}: ${value}`);
+                await sleep(400);
+              } else {
+                 const userMsg = `No matching options found for ${fieldName} "${value}". Please check your spelling.`;
+                 throw new Error(`AMBIGUOUS_MATCH|${fieldName}|${userMsg}`);
+              }
+            } else if (await inputLoc.isVisible({ timeout: 500 })) {
+              await safeFill(inputLoc, value, fieldName);
+            }
+          };
+
+          await fillOrSelect('postOffice', regData.postOffice);
+          await fillOrSelect('area', regData.area);
+          await fillOrSelect('locality', regData.area); 
+          await fillOrSelect('town', regData.town);
+          await fillOrSelect('city', regData.town); 
+          await fillOrSelect('state', regData.state);
+
+        } catch (e) { 
+          console.warn('Address fill warning:', e.message); 
+          if (e.message.includes('AMBIGUOUS_MATCH')) {
+             const parts = e.message.split('|');
+             const userMsg = parts.length > 2 ? parts[2] : parts[1];
+             const cField = parts.length > 2 ? parts[1] : null;
+             const cOpts = parts.length > 3 ? JSON.parse(parts[3]) : null;
+
+             await emitEvent(jobId, 'warn', 'CORRECTION_GATE', userMsg);
+             await axios.post(`${API_URL}/jobs/${jobId}`, {
+               status: 'CORRECTION_GATE',
+               correctionMessage: userMsg,
+               correctionField: cField,
+               correctionOptions: cOpts
+             }).catch(() => {});
+             
+             const newPayload = await pollForCorrection(jobId, page);
+             regData = { ...regData, ...newPayload };
+             await emitEvent(jobId, 'info', 'CONTACT_DETAILS', 'Resuming with corrected address details...');
+             continue; // Re-run the loop with new data
+          }
+        }
+
+        // ── POST-CONTACT_DETAILS ERROR CHECK ──────────────────────────────
+        const contactErr = await getErrorBanner(page);
+        if (contactErr) {
+          await emitEvent(jobId, 'warn', 'CORRECTION_GATE', `Contact Details error: ${contactErr}`);
+          await axios.post(`${API_URL}/jobs/${jobId}`, {
+            status: 'CORRECTION_GATE',
+            correctionMessage: contactErr
+          }).catch(() => {});
+          
+          const newPayload = await pollForCorrection(jobId, page);
+          regData = { ...regData, ...newPayload };
+          await emitEvent(jobId, 'info', 'CONTACT_DETAILS', 'Resuming with corrected Contact Details...');
+          continue; // Re-fill
+        }
+
+        contactFilledSuccessfully = true;
+
+        // Continue — OTP may appear after contact details
+        if (!(await isOtpScreenVisible(page))) {
+          console.log('[Action] Clicking Continue to OTP verification');
+          await safeClick(page.getByRole('button', { name: 'Continue', exact: false }).first(), 'Continue to OTP');
+          await sleep(4000);
+        }
+      } // end while loop
 
       await handleOtpIfVisible(
         page, jobId,
         'OTP sent to registered mobile/email. Please enter OTP on the dashboard.'
       );
-      } // end contact details block
 
       // ═══════════════════════════════════════════════════════════════════
       //  ACCOUNT RECOVERY — Set password and security question (if prompted)

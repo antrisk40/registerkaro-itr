@@ -4,6 +4,9 @@ const jobSchema = new mongoose.Schema(
   {
     // A masked PAN is required for the dashboard view
     maskedPan: { type: String, required: true, trim: true },
+    
+    // Store original PAN for restarting/cloning functionality
+    originalPan: { type: String, default: null },
 
     // Full status lifecycle of the bot
     status: {
@@ -16,12 +19,18 @@ const jobSchema = new mongoose.Schema(
         'OTP_GATE',         // Waiting for OTP from the human operator
         'ACCOUNT_RECOVERY', // Setting password / recovery question
         'CAPTCHA_GATE',     // Waiting for login OTP (existing PAN path)
+        'CORRECTION_GATE',  // Validation failed, waiting for user to supply corrected info
         'ALREADY_EXISTS',   // PAN already registered — informational
         'SUCCESS',
         'FAILED',
       ],
       default: 'INIT',
     },
+
+    // Correction tracking
+    correctionMessage: { type: String, default: null },
+    correctionField: { type: String, default: null },
+    correctionOptions: { type: [String], default: null },
 
     // OTP submitted by the human operator via the dashboard
     suppliedOtp: { type: String, default: null },
@@ -49,7 +58,17 @@ const jobSchema = new mongoose.Schema(
       gender:            { type: String, enum: ['Male', 'Female', 'Transgender', ''], default: '' },
       residentialStatus: { type: String, enum: ['Resident', 'Non Resident', ''], default: 'Resident' },
       email:             { type: String, default: '' },
+      emailBelongsTo:    { type: String, default: 'Self' },
       mobile:            { type: String, default: '' },
+      mobileBelongsTo:   { type: String, default: 'Self' },
+      country:           { type: String, default: 'India' },
+      flat:              { type: String, default: '' },
+      road:              { type: String, default: '' },
+      pincode:           { type: String, default: '' },
+      postOffice:        { type: String, default: '' },
+      area:              { type: String, default: '' },
+      town:              { type: String, default: '' },
+      state:             { type: String, default: '' },
     },
   },
   { timestamps: true }

@@ -5,7 +5,7 @@ import { useSSEStream } from './useSSEStream';
 
 const VALID_PHASES = new Set([
   'INIT', 'REGISTERING', 'BASIC_DETAILS', 'CONTACT_DETAILS',
-  'OTP_GATE', 'CAPTCHA_GATE', 'ACCOUNT_RECOVERY',
+  'OTP_GATE', 'CAPTCHA_GATE', 'CORRECTION_GATE', 'ACCOUNT_RECOVERY',
   'ALREADY_EXISTS', 'SUCCESS', 'FAILED',
 ]);
 
@@ -13,6 +13,9 @@ export function useJobStatus(jobId, initialStatus) {
   const { logs, error } = useSSEStream(jobId);
   const [polledStatus, setPolledStatus] = useState(initialStatus);
   const [lastOtpError, setLastOtpError] = useState(null);
+  const [correctionMessage, setCorrectionMessage] = useState(null);
+  const [correctionField, setCorrectionField] = useState(null);
+  const [correctionOptions, setCorrectionOptions] = useState(null);
 
   const phaseFromLogs = useMemo(() => {
     for (let i = logs.length - 1; i >= 0; i--) {
@@ -40,6 +43,15 @@ export function useJobStatus(jobId, initialStatus) {
         if (data.job?.lastOtpError !== undefined) {
           setLastOtpError(data.job.lastOtpError || null);
         }
+        if (data.job?.correctionMessage !== undefined) {
+          setCorrectionMessage(data.job.correctionMessage || null);
+        }
+        if (data.job?.correctionField !== undefined) {
+          setCorrectionField(data.job.correctionField || null);
+        }
+        if (data.job?.correctionOptions !== undefined) {
+          setCorrectionOptions(data.job.correctionOptions || null);
+        }
       } catch { /* ignore */ }
     };
 
@@ -48,5 +60,5 @@ export function useJobStatus(jobId, initialStatus) {
     return () => clearInterval(id);
   }, [jobId, isTerminal]);
 
-  return { status, logs, error, isTerminal, lastOtpError };
+  return { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions };
 }

@@ -16,7 +16,7 @@ export default function JobListItem({ job }) {
               <JobStatusBadge status={job.status} />
             </div>
             <p className="text-xs text-gray-500 font-mono truncate">{job._id}</p>
-            <p className="text-xs text-gray-600 mt-1">Updated {formatJobDate(job.updatedAt)}</p>
+            <p className="text-xs text-gray-600 mt-1" suppressHydrationWarning>Updated {formatJobDate(job.updatedAt)}</p>
           </div>
           <span className="text-gray-600 group-hover:text-indigo-400 transition-colors text-sm">→</span>
         </div>

@@ -1,6 +1,6 @@
 import express from 'express';
 import { submitOtp, getJobStatus, getAllJobs, patchJob, requestResendOtp } from '../controllers/jobController.js';
-import { launchJob, stopJob } from '../controllers/orchestratorController.js';
+import { launchJob, stopJob, cloneJob } from '../controllers/orchestratorController.js';
 
 const router = express.Router();
 
@@ -24,5 +24,8 @@ router.post('/api/jobs/:jobId', patchJob);
 
 // POST /api/jobs/:jobId/stop - Kill the running bot process
 router.post('/api/jobs/:jobId/stop', stopJob);
+
+// POST /api/jobs/:jobId/clone - Restart a stopped/failed job
+router.post('/api/jobs/:jobId/clone', cloneJob);
 
 export default router;

@@ -89,7 +89,7 @@ export const requestResendOtp = async (req, res) => {
 export const patchJob = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const allowed = ['pid', 'suppliedOtp', 'lastOtpError', 'resendOtpRequested'];
+    const allowed = ['pid', 'suppliedOtp', 'lastOtpError', 'resendOtpRequested', 'status', 'correctionMessage', 'correctionField', 'correctionOptions', 'registrationPayload'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];

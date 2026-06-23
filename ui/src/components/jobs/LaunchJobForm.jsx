@@ -24,9 +24,24 @@ export default function LaunchJobForm() {
   const [gender, setGender] = useState('Male');
   const [residentialStatus, setResidentialStatus] = useState('Resident');
   const [email, setEmail] = useState('');
+  const [emailBelongsTo, setEmailBelongsTo] = useState('Self');
   const [mobile, setMobile] = useState('');
+  const [mobileBelongsTo, setMobileBelongsTo] = useState('Self');
+  
+  // Address details
+  const [country, setCountry] = useState('India');
+  const [flat, setFlat] = useState('');
+  const [road, setRoad] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [postOffice, setPostOffice] = useState('');
+  const [area, setArea] = useState('');
+  const [town, setTown] = useState('');
+  const [state, setStateName] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const BELONGS_TO_OPTIONS = ['Self', 'Spouse', 'Son', 'Daughter', 'Brother', 'Sister', 'Father', 'Mother', 'Other'];
 
   const handleToggle = (val) => {
     setIsOthers(val);
@@ -44,7 +59,8 @@ export default function LaunchJobForm() {
           pan, isOthers, category,
           lastName, middleName, firstName,
           dateOfBirth, gender, residentialStatus,
-          email, mobile,
+          email, emailBelongsTo, mobile, mobileBelongsTo,
+          country, flat, road, pincode, postOffice, area, town, state
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -166,13 +182,58 @@ export default function LaunchJobForm() {
               <div className="border-t border-white/10 pt-3 mt-1">
                 <p className="text-xs text-gray-500 mb-3 uppercase tracking-wider">Contact Details</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Field label="Mobile *">
-                    <Input type="tel" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="10-digit" maxLength={10} />
+                  <div className="flex flex-col gap-2">
+                    <Field label="Mobile *">
+                      <Input type="tel" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="10-digit" maxLength={10} />
+                    </Field>
+                    <Select value={mobileBelongsTo} onChange={(e) => setMobileBelongsTo(e.target.value)} options={BELONGS_TO_OPTIONS} />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Field label="Email *">
+                      <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@email.com" />
+                    </Field>
+                    <Select value={emailBelongsTo} onChange={(e) => setEmailBelongsTo(e.target.value)} options={BELONGS_TO_OPTIONS} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-white/10 pt-3 mt-1">
+                <p className="text-xs text-gray-500 mb-3 uppercase tracking-wider">Postal Address</p>
+                
+                <Field label="Country *">
+                  <Select value={country} onChange={(e) => setCountry(e.target.value)} options={['India', 'Others']} />
+                </Field>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Flat/Door/Building *">
+                    <Input type="text" value={flat} onChange={(e) => setFlat(e.target.value)} />
                   </Field>
-                  <Field label="Email *">
-                    <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@email.com" />
+                  <Field label="Road/Street/Block">
+                    <Input type="text" value={road} onChange={(e) => setRoad(e.target.value)} />
                   </Field>
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                  <Field label="Pincode *">
+                    <Input type="text" value={pincode} onChange={(e) => setPincode(e.target.value)} maxLength={6} />
+                  </Field>
+                  <Field label="Post Office *">
+                    <Input type="text" value={postOffice} onChange={(e) => setPostOffice(e.target.value)} />
+                  </Field>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                  <Field label="Area/Locality *">
+                    <Input type="text" value={area} onChange={(e) => setArea(e.target.value)} />
+                  </Field>
+                  <Field label="Town/City/District *">
+                    <Input type="text" value={town} onChange={(e) => setTown(e.target.value)} />
+                  </Field>
+                </div>
+                
+                <Field label="State *" className="mt-2">
+                  <Input type="text" value={state} onChange={(e) => setStateName(e.target.value)} />
+                </Field>
               </div>
             </div>
           )}

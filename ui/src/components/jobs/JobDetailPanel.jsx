@@ -6,6 +6,8 @@ import JobStatusBadge from './JobStatusBadge';
 import JobConsole from './JobConsole';
 import OtpInputForm from './OtpInputForm';
 import StopJobControl from './StopJobControl';
+import RestartJobControl from './RestartJobControl';
+import CorrectionForm from './CorrectionForm';
 import { formatJobDate } from '../../lib/jobs';
 import { useJobStatus } from '../../hooks/useJobStatus';
 
@@ -13,7 +15,7 @@ const INPUT_PHASES = ['OTP_GATE', 'CAPTCHA_GATE'];
 
 export default function JobDetailPanel({ job: initialJob }) {
   const [stopped, setStopped] = useState(false);
-  const { status, logs, error, isTerminal, lastOtpError } = useJobStatus(initialJob._id, initialJob.status);
+  const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions } = useJobStatus(initialJob._id, initialJob.status);
 
   const needsInput = INPUT_PHASES.includes(status) && !isTerminal && !stopped;
   const latestOtpPrompt = logs.filter((l) => INPUT_PHASES.includes(l.phase)).at(-1);
@@ -43,6 +45,27 @@ export default function JobDetailPanel({ job: initialJob }) {
         </Card>
       )}
 
+      {status === 'CORRECTION_GATE' && !isTerminal && !stopped && (
+        <Card className="p-5 border-orange-500/40 bg-orange-500/10">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <h3 className="text-lg font-bold text-orange-300">Correction Required</h3>
+              <p className="text-sm text-orange-200/80">
+                {correctionMessage || 'The portal rejected some registration details. Please correct them and resume.'}
+              </p>
+            </div>
+          </div>
+          <CorrectionForm 
+            jobId={initialJob._id} 
+            initialPayload={initialJob.registrationPayload}
+            correctionMessage={correctionMessage}
+            correctionField={correctionField}
+            correctionOptions={correctionOptions}
+          />
+        </Card>
+      )}
+
       <Card className="p-6">
         {!isTerminal && !stopped && (
           <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 opacity-70 animate-pulse" />
@@ -53,14 +76,16 @@ export default function JobDetailPanel({ job: initialJob }) {
             <p className="text-xs text-gray-500 font-mono mb-1">JOB ID</p>
             <p className="text-sm text-gray-300 font-mono break-all">{initialJob._id}</p>
             <p className="text-lg text-white font-semibold mt-2">PAN: {initialJob.maskedPan}</p>
-            <p className="text-xs text-gray-500 mt-2">Created {formatJobDate(initialJob.createdAt)}</p>
-            <p className="text-xs text-gray-500">Updated {formatJobDate(initialJob.updatedAt)}</p>
+            <p className="text-xs text-gray-500 mt-2" suppressHydrationWarning>Created {formatJobDate(initialJob.createdAt)}</p>
+            <p className="text-xs text-gray-500" suppressHydrationWarning>Updated {formatJobDate(initialJob.updatedAt)}</p>
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
             <JobStatusBadge status={status} stopped={stopped} />
-            {!isTerminal && !stopped && (
+            {(!isTerminal && !stopped) ? (
               <StopJobControl jobId={initialJob._id} onStopped={() => setStopped(true)} />
+            ) : (
+              <RestartJobControl jobId={initialJob._id} />
             )}
           </div>
         </div>
