@@ -49,3 +49,26 @@ export const submitOtp = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+/**
+ * PATCH /api/jobs/:jobId — generic field patcher used by the bot to store its PID
+ * and by the UI to set suppliedOtp to null (OTP retry clearing).
+ */
+export const patchJob = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const allowed = ['pid', 'suppliedOtp']; // Only allow safe fields to be patched externally
+    const updates = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+    const job = await Job.findByIdAndUpdate(jobId, { $set: updates }, { new: true, upsert: true });
+    return res.status(200).json({ success: true, job });
+  } catch (error) {
+    console.error('[Jobs] Error patching job:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};

@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import eventRoutes from './routes/eventRoutes.js';
 import jobRoutes from './routes/jobRoutes.js';
+import { launchJob } from './controllers/orchestratorController.js';
 
 // Load environment variables (e.g. MONGO_URI, WEBHOOK_SECRET)
 dotenv.config();
@@ -21,6 +22,7 @@ app.use(express.json());
 // Mount the event routes
 app.use('/', eventRoutes);
 app.use('/', jobRoutes);
+app.post('/api/jobs/launch', launchJob);
 
 // --- GLOBAL ERROR HANDLER ---
 // Captures any unhandled exceptions in routes or middleware and prevents server crashes

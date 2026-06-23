@@ -1,15 +1,22 @@
 import express from 'express';
-import { submitOtp, getJobStatus, getAllJobs } from '../controllers/jobController.js';
+import { submitOtp, getJobStatus, getAllJobs, patchJob } from '../controllers/jobController.js';
+import { stopJob } from '../controllers/orchestratorController.js';
 
 const router = express.Router();
 
-// GET /api/jobs/:jobId - For the bot to// Polling endpoint for Playwright bot
+// GET /api/jobs/:jobId - For the bot to poll
 router.get('/api/jobs/:jobId', getJobStatus);
 
-// Endpoint for Next.js Admin Dashboard to fetch all jobs
+// GET /api/jobs - Dashboard job list
 router.get('/api/jobs', getAllJobs);
 
-// POST /api/jobs/:jobId/otp - For the UI to submit the OTP
+// POST /api/jobs/:jobId/otp - OTP submission from the UI
 router.post('/api/jobs/:jobId/otp', submitOtp);
+
+// POST /api/jobs/:jobId - Generic patch (bot stores PID, OTP retry clear)
+router.post('/api/jobs/:jobId', patchJob);
+
+// POST /api/jobs/:jobId/stop - Kill the running bot process
+router.post('/api/jobs/:jobId/stop', stopJob);
 
 export default router;

@@ -8,7 +8,7 @@
     "dev:service": "npm run dev --prefix service",
     "start:automation": "npm start --prefix automation",
     "dev": "concurrently \"npm run dev:service\" \"npm run dev:ui\"",
-    "dev:all": "concurrently \"npm run dev:service\" \"npm run dev:ui\" \"npm run start:automation\"",
+    "dev:all": "concurrently \"npm run dev:service\" \"npm run dev:ui\"",
     "install:all": "npm install && npm install --prefix service && npm install --prefix ui && npm install --prefix automation"
   },
   "keywords": [],
