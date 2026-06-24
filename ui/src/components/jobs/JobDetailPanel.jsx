@@ -9,18 +9,40 @@ import StopJobControl from './StopJobControl';
 import RestartJobControl from './RestartJobControl';
 import CorrectionForm from './CorrectionForm';
 import RecoveredPasswordCard from './RecoveredPasswordCard';
-import { formatJobDate } from '../../lib/jobs';
+import AdminJobEditPanel from './AdminJobEditPanel';
+import { formatJobDate, TERMINAL_STATUSES } from '../../lib/jobs';
 import { useJobStatus } from '../../hooks/useJobStatus';
+import { useAuth } from '../../context/AuthContext';
 
 const INPUT_PHASES = ['OTP_GATE', 'CAPTCHA_GATE'];
+const AADHAAR_OTP_OPTIONS = ['I already have an OTP', 'Generate OTP'];
+
+const isAadhaarOtpCorrectionLog = (log) =>
+  log?.phase === 'CORRECTION_GATE' &&
+  /Aadhaar OTP|generate a new OTP|use an existing one/i.test(log.message || '');
 
 export default function JobDetailPanel({ job: initialJob }) {
   const [stopped, setStopped] = useState(false);
+  const { isAdmin } = useAuth();
   const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword } = useJobStatus(initialJob._id, initialJob.status, initialJob);
 
   const needsInput = INPUT_PHASES.includes(status) && !isTerminal && !stopped;
   const latestOtpPrompt = logs.filter((l) => INPUT_PHASES.includes(l.phase)).at(-1);
-  const hasPassword = !!(initialJob.hasPassword);
+  const latestCorrectionLog = logs.filter((l) => l.phase === 'CORRECTION_GATE').at(-1);
+  const isAadhaarOtpGate =
+    correctionField === 'aadhaarOtpChoice' ||
+    (status === 'CORRECTION_GATE' && isAadhaarOtpCorrectionLog(latestCorrectionLog));
+  const effectiveCorrectionField = isAadhaarOtpGate
+    ? 'aadhaarOtpChoice'
+    : (correctionField || 'registrationDetails');
+  const effectiveCorrectionOptions = isAadhaarOtpGate
+    ? ((correctionOptions?.length >= 2) ? correctionOptions : AADHAAR_OTP_OPTIONS)
+    : correctionOptions;
+  const effectiveCorrectionMessage = isAadhaarOtpGate
+    ? (correctionMessage || latestCorrectionLog?.message || 'Aadhaar OTP required. Do you want to generate a new OTP or use an existing one?')
+    : correctionMessage;
+  const hasPassword = isAdmin && !!(initialJob.hasPassword);
+  const showAdminEdit = isAdmin && TERMINAL_STATUSES.includes(status);
 
   return (
     <div className="space-y-6">
@@ -48,35 +70,39 @@ export default function JobDetailPanel({ job: initialJob }) {
       )}
 
       {status === 'CORRECTION_GATE' && !isTerminal && !stopped && (
-        <Card className={`p-5 ${correctionField === 'aadhaarOtpChoice' ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-orange-500/40 bg-orange-500/10'}`}>
+        <Card className={`p-5 ${isAadhaarOtpGate ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-orange-500/40 bg-orange-500/10'}`}>
           <div className="flex items-center gap-3 mb-4">
-            <span className="text-2xl">{correctionField === 'aadhaarOtpChoice' ? '🔑' : '⚠️'}</span>
+            <span className="text-2xl">{isAadhaarOtpGate ? '🔑' : '⚠️'}</span>
             <div>
-              <h3 className={`text-lg font-bold ${correctionField === 'aadhaarOtpChoice' ? 'text-indigo-300' : 'text-orange-300'}`}>
-                {correctionField === 'aadhaarOtpChoice' ? 'Action Required — Account Recovery' : 'Correction Required'}
+              <h3 className={`text-lg font-bold ${isAadhaarOtpGate ? 'text-indigo-300' : 'text-orange-300'}`}>
+                {isAadhaarOtpGate ? 'Action Required — Account Recovery' : 'Correction Required'}
               </h3>
-              <p className={`text-sm ${correctionField === 'aadhaarOtpChoice' ? 'text-indigo-200/80' : 'text-orange-200/80'}`}>
-                {correctionMessage || (correctionField === 'aadhaarOtpChoice' ? 'Please select how to proceed with Aadhaar OTP.' : 'The portal rejected some registration details. Please correct them and resume.')}
+              <p className={`text-sm ${isAadhaarOtpGate ? 'text-indigo-200/80' : 'text-orange-200/80'}`}>
+                {effectiveCorrectionMessage || (isAadhaarOtpGate ? 'Please select how to proceed with Aadhaar OTP.' : 'The portal rejected some registration details. Please correct them and resume.')}
               </p>
             </div>
           </div>
-          {correctionField ? (
-            <CorrectionForm
-              key={correctionField}
-              jobId={initialJob._id} 
-              initialPayload={initialJob.registrationPayload}
-              correctionMessage={correctionMessage}
-              correctionField={correctionField}
-              correctionOptions={correctionOptions}
-            />
-          ) : (
-            <p className="text-sm text-slate-400 animate-pulse">Loading options from portal...</p>
-          )}
+          <CorrectionForm
+            key={effectiveCorrectionField}
+            jobId={initialJob._id}
+            initialPayload={initialJob.registrationPayload}
+            correctionMessage={effectiveCorrectionMessage}
+            correctionField={effectiveCorrectionField}
+            correctionOptions={effectiveCorrectionOptions}
+          />
         </Card>
       )}
 
       {hasPassword && (
         <RecoveredPasswordCard jobId={initialJob._id} hasPassword={hasPassword} />
+      )}
+
+      {showAdminEdit && (
+        <AdminJobEditPanel
+          jobId={initialJob._id}
+          registrationPayload={initialJob.registrationPayload}
+          outcomeMessage={initialJob.outcomeMessage}
+        />
       )}
 
       <Card className="p-6">
@@ -91,6 +117,9 @@ export default function JobDetailPanel({ job: initialJob }) {
             <p className="text-lg text-white font-semibold mt-2">PAN: {initialJob.maskedPan}</p>
             <p className="text-xs text-gray-500 mt-2" suppressHydrationWarning>Created {formatJobDate(initialJob.createdAt)}</p>
             <p className="text-xs text-gray-500" suppressHydrationWarning>Updated {formatJobDate(initialJob.updatedAt)}</p>
+            {initialJob.createdByName && (
+              <p className="text-xs text-gray-500">Launched by {initialJob.createdByName}</p>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">

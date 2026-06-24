@@ -9,7 +9,7 @@ import { handleUnknownState, handleLoginPage } from './states/login.js';
 import { handleRegBasicDetails, handleRegContactDetails, handleRegisterGetStarted } from './states/registration.js';
 import { handleForgotPwdMethod, handleForgotPwdOtpChoice, handleForgotPwdPan } from './states/recovery.js';
 import { handleOtpVerification, handleSetPassword } from './states/shared.js';
-import axios from 'axios';
+import { botPatch } from './utils/apiClient.js';
 
 chromium.use(stealth());
 
@@ -125,7 +125,7 @@ const runBotStateMachine = async () => {
       } else {
         console.error('Fatal crash inside state machine:', err);
         await emitEvent(jobId, 'error', 'FAILED', `Fatal Bot Crash: ${err.message}`);
-        await axios.patch(`${config.API_URL}/jobs/${jobId}`, {
+        await botPatch(`${config.API_URL}/jobs/${jobId}`, {
           status: 'FAILED',
           outcomeMessage: `Bot crashed: ${err.message}`
         }).catch(() => {});

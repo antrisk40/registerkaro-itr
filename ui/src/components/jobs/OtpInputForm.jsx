@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { getApiBase } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
 
@@ -48,7 +48,7 @@ export default function OtpInputForm({ jobId, status, logs = [], lastOtpError = 
     setLocalError('');
     setResendMsg('');
     try {
-      const res = await fetch(`${getApiBase()}/jobs/${jobId}/otp`, {
+      const res = await apiFetch(`/jobs/${jobId}/otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ otp: otp.trim() }),
@@ -69,7 +69,7 @@ export default function OtpInputForm({ jobId, status, logs = [], lastOtpError = 
     setOtp('');
     setPending(false);
     try {
-      const res = await fetch(`${getApiBase()}/jobs/${jobId}/resend-otp`, { method: 'POST' });
+      const res = await apiFetch(`/jobs/${jobId}/resend-otp`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to request resend');
       setResendMsg('Resend requested — bot will click Resend on the portal. Enter the new OTP when it arrives.');

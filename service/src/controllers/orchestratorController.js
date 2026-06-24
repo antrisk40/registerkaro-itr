@@ -98,6 +98,8 @@ export const launchJob = async (req, res) => {
       originalPan: pan,
       status: 'INIT',
       pid: pid,
+      createdBy: req.user?.id || null,
+      createdByName: req.user?.displayName || null,
       registrationPayload: {
         isOthers, category, lastName, middleName, firstName, dateOfBirth, gender, residentialStatus, 
         email, emailBelongsTo, mobile, mobileBelongsTo,
@@ -125,6 +127,10 @@ export const stopJob = async (req, res) => {
 
     const job = await Job.findById(jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    if (req.user?.role !== 'admin' && String(job.createdBy) !== String(req.user?.id)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
 
     // Kill the process tree if a PID exists
     if (job.pid) {
@@ -160,6 +166,10 @@ export const cloneJob = async (req, res) => {
     const existingJob = await Job.findById(jobId);
     
     if (!existingJob) return res.status(404).json({ error: 'Original job not found' });
+
+    if (req.user?.role !== 'admin' && String(existingJob.createdBy) !== String(req.user?.id)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     
     const panToUse = existingJob.originalPan || fallbackPan;
     if (!panToUse) {

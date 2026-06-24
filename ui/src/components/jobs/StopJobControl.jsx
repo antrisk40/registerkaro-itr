@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { getApiBase } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 import Button from '../ui/Button';
 
 export default function StopJobControl({ jobId, onStopped }) {
@@ -11,7 +11,7 @@ export default function StopJobControl({ jobId, onStopped }) {
   const handleStop = async () => {
     setStopping(true);
     try {
-      const res = await fetch(`${getApiBase()}/jobs/${jobId}/stop`, { method: 'POST' });
+      const res = await apiFetch(`/jobs/${jobId}/stop`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to stop');
       onStopped?.();

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import Event from '../models/eventSchema.js';
-import Job from '../models/jobSchema.js'; 
+import Job from '../models/jobSchema.js';
+import { loadJobForUser } from '../utils/jobAccess.js';
 
 // Create a local Node.js Event Emitter. 
 // This acts as our "Ring Buffer" to fan out live events to connected clients.
@@ -69,6 +70,14 @@ export const handleWebhookEvent = async (req, res) => {
  */
 export const streamJobEvents = async (req, res) => {
   const { jobId } = req.params;
+
+  const access = await loadJobForUser(jobId, req.user);
+  if (access.error === 'not_found') {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  if (access.error === 'forbidden') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   // Set the mandatory SSE HTTP Headers
   res.writeHead(200, {

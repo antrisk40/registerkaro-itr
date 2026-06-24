@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { getApiBase } from '../lib/api';
+import { apiFetch } from '../lib/api';
 import { TERMINAL_STATUSES } from '../lib/jobs';
 import { useSSEStream } from './useSSEStream';
 
@@ -37,7 +37,7 @@ export function useJobStatus(jobId, initialStatus, initialJob = {}) {
 
     const poll = async () => {
       try {
-        const res = await fetch(`${getApiBase()}/jobs/${jobId}`, { cache: 'no-store' });
+        const res = await apiFetch(`/jobs/${jobId}`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.job?.status) setPolledStatus(data.job.status);

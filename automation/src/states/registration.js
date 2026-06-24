@@ -1,9 +1,9 @@
-import axios from 'axios';
 import { emitEvent } from '../utils/emitter.js';
 import { safeClick, safeFill, sleep, getErrorBanner } from '../core/dom.js';
 import { pollForCorrection } from '../utils/polling.js';
 import { parseDob } from '../utils/parser.js';
 import { config } from '../core/config.js';
+import { botPatch } from '../utils/apiClient.js';
 
 export const handleRegisterGetStarted = async (page, context) => {
   console.log('[State] REGISTER_GET_STARTED');
@@ -148,9 +148,11 @@ export const handleRegContactDetails = async (page, context) => {
 
 const handleCorrection = async (page, context, status, errorMsg) => {
   await emitEvent(context.jobId, 'warn', status, `Validation error: ${errorMsg}`);
-  await axios.post(`${config.API_URL}/jobs/${context.jobId}`, {
+  await botPatch(`${config.API_URL}/jobs/${context.jobId}`, {
     status,
-    correctionMessage: errorMsg
+    correctionMessage: errorMsg,
+    correctionField: 'registrationDetails',
+    correctionOptions: null,
   }).catch(() => {});
   
   const newPayload = await pollForCorrection(context.jobId, page);

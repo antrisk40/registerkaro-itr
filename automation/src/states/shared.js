@@ -1,8 +1,8 @@
-import axios from 'axios';
 import { emitEvent } from '../utils/emitter.js';
 import { pollForOtp, setOtpError } from '../utils/polling.js';
 import { safeClick, sleep, unlockPageScroll, lockPageScroll, blurActiveElement, dispatchInputEvents, getErrorBanner } from '../core/dom.js';
 import { config } from '../core/config.js';
+import { botPost, botPatch } from '../utils/apiClient.js';
 
 export const handleOtpVerification = async (page, context) => {
   console.log('[State] REG_OTP');
@@ -14,7 +14,7 @@ export const handleOtpVerification = async (page, context) => {
 
   const message = context.otpMessage || 'OTP sent. Please enter it on the dashboard.';
   await emitEvent(context.jobId, 'info', 'OTP_GATE', message);
-  await axios.post(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null }).catch(() => {});
+  await botPost(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null }).catch(() => {});
 
   const otp = await pollForOtp(context.jobId, page);
   console.log(`[Action] Entering OTP (attempt ${context.otpAttempts + 1})`);
@@ -46,7 +46,7 @@ export const handleOtpVerification = async (page, context) => {
       await setOtpError(context.jobId, errMsg);
     } else {
       // Success
-      await axios.post(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null, suppliedOtp: null }).catch(() => {});
+      await botPost(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null, suppliedOtp: null }).catch(() => {});
     }
   }
 };
@@ -195,7 +195,7 @@ export const handleSetPassword = async (page, context) => {
   await sleep(5000);
 
   // Save plain-text password via API — the service layer encrypts it with AES-256 before writing to MongoDB
-  await axios.patch(`${config.API_URL}/jobs/${context.jobId}`, {
+  await botPatch(`${config.API_URL}/jobs/${context.jobId}`, {
     status: 'SUCCESS',
     outcomeMessage: 'Password set successfully via Aadhaar OTP recovery.',
     recoveredPassword: newPassword,  // service will encrypt this → encryptedPassword in DB

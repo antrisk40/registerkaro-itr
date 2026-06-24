@@ -1,18 +1,18 @@
-import axios from 'axios';
 import { emitEvent } from './emitter.js';
 import { sleep } from '../core/dom.js';
 import { config } from '../core/config.js';
+import { botGet, botPost } from './apiClient.js';
 
 export const pollForOtp = async (jobId, page = null) => {
   console.log(`[Polling] Waiting for OTP on job ${jobId}...`);
   while (true) {
     try {
-      const { data } = await axios.get(`${config.API_URL}/jobs/${jobId}`);
+      const { data } = await botGet(`${config.API_URL}/jobs/${jobId}`);
       const job = data.job;
 
       if (page && job?.resendOtpRequested) {
         await clickPortalResend(page, jobId);
-        await axios.post(`${config.API_URL}/jobs/${jobId}`, {
+        await botPost(`${config.API_URL}/jobs/${jobId}`, {
           resendOtpRequested: false,
           suppliedOtp: null,
           lastOtpError: null,
@@ -53,12 +53,12 @@ export const pollForCorrection = async (jobId, page) => {
   console.log(`[Polling] Waiting for user correction on dashboard for job ${jobId}...`);
   while (true) {
     if (page.isClosed()) throw new Error('Page closed during correction wait');
-    
+
     try {
-      const res = await axios.get(`${config.API_URL}/jobs/${jobId}`);
-      if (res.data.job && res.data.job.status === 'REGISTERING' && !res.data.job.correctionMessage) {
-        // The user submitted the correction and resumed the job
-        return res.data.job.registrationPayload;
+      const res = await botGet(`${config.API_URL}/jobs/${jobId}`);
+      const job = res.data.job;
+      if (job && job.status === 'REGISTERING' && !job.correctionMessage) {
+        return job.registrationPayload;
       }
     } catch (e) {
       console.warn('[Polling Error] Could not check correction status:', e.message);
@@ -67,8 +67,26 @@ export const pollForCorrection = async (jobId, page) => {
   }
 };
 
+export const pollForAadhaarOtpChoice = async (jobId) => {
+  console.log(`[Polling] Waiting for Aadhaar OTP choice on dashboard for job ${jobId}...`);
+  while (true) {
+    try {
+      const { data } = await botGet(`${config.API_URL}/jobs/${jobId}`);
+      const job = data.job;
+      const choice = job?.registrationPayload?.aadhaarOtpChoice;
+      if (choice && !job.correctionField) {
+        console.log(`[Polling] Aadhaar OTP choice received: ${choice}`);
+        return choice;
+      }
+    } catch (e) {
+      console.warn('[Polling Error] Could not check Aadhaar OTP choice:', e.message);
+    }
+    await sleep(1500);
+  }
+};
+
 export const setOtpError = async (jobId, message) => {
-  await axios.post(`${config.API_URL}/jobs/${jobId}`, {
+  await botPost(`${config.API_URL}/jobs/${jobId}`, {
     suppliedOtp: null,
     lastOtpError: message,
   }).catch(() => {});

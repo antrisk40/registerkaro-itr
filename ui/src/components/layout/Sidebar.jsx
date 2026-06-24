@@ -1,13 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-
-const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: '📊' },
-  { href: '/launch', label: 'Launch Bot', icon: '🚀' },
-  { href: '/jobs', label: 'All Jobs', icon: '📋' },
-];
+import { usePathname, useRouter } from 'next/navigation';
+import { useAuth } from '../../context/AuthContext';
 
 function NavLink({ href, label, icon, active }) {
   return (
@@ -27,10 +22,23 @@ function NavLink({ href, label, icon, active }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, isAdmin, logout } = useAuth();
 
   const isActive = (href) => {
     if (href === '/') return pathname === '/';
     return pathname.startsWith(href);
+  };
+
+  const navItems = [
+    ...(isAdmin ? [{ href: '/', label: 'Dashboard', icon: '📊' }] : []),
+    { href: '/launch', label: 'Launch Bot', icon: '🚀' },
+    { href: '/jobs', label: isAdmin ? 'All Jobs' : 'My Jobs', icon: '📋' },
+  ];
+
+  const handleLogout = () => {
+    logout();
+    router.replace('/login');
   };
 
   return (
@@ -38,13 +46,27 @@ export default function Sidebar() {
       <div>
         <p className="text-xs uppercase tracking-widest text-gray-500 mb-1">RegisterKaro</p>
         <h2 className="text-lg font-bold text-white">Automation Engine</h2>
+        {user && (
+          <p className="text-xs text-gray-400 mt-2">
+            {user.displayName}
+            <span className="ml-1 uppercase text-indigo-400">({user.role})</span>
+          </p>
+        )}
       </div>
 
-      <nav className="flex flex-col gap-2">
-        {NAV_ITEMS.map((item) => (
+      <nav className="flex flex-col gap-2 flex-1">
+        {navItems.map((item) => (
           <NavLink key={item.href} {...item} active={isActive(item.href)} />
         ))}
       </nav>
+
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="text-sm text-gray-400 hover:text-white px-4 py-2 rounded-lg hover:bg-white/5 text-left"
+      >
+        Sign out
+      </button>
     </aside>
   );
 }

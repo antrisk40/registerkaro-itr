@@ -3,13 +3,45 @@
  * Server components talk to Express directly.
  */
 export function getApiBase() {
-  // Always use the full backend URL to bypass the noisy Next.js proxy
   return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+}
+
+const TOKEN_KEY = 'auth_token';
+
+export function getToken() {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token) {
+  if (typeof window === 'undefined') return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function authHeaders(extra = {}) {
+  const token = getToken();
+  return {
+    ...extra,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+export async function apiFetch(path, options = {}) {
+  const res = await fetch(`${getApiBase()}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    setToken(null);
+    window.location.href = '/login';
+  }
+  return res;
 }
 
 export async function fetchJobs() {
   try {
-    const res = await fetch(`${getApiBase()}/jobs`, { cache: 'no-store' });
+    const res = await apiFetch('/jobs', { cache: 'no-store' });
     if (!res.ok) return [];
     const data = await res.json();
     return data.jobs || [];
@@ -20,11 +52,29 @@ export async function fetchJobs() {
 
 export async function fetchJob(jobId) {
   try {
-    const res = await fetch(`${getApiBase()}/jobs/${jobId}`, { cache: 'no-store' });
+    const res = await apiFetch(`/jobs/${jobId}`, { cache: 'no-store' });
     if (!res.ok) return null;
     const data = await res.json();
     return data.job || null;
   } catch {
     return null;
   }
+}
+
+export async function loginRequest(username, password) {
+  const res = await fetch(`${getApiBase()}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Login failed');
+  return data;
+}
+
+export async function fetchMe() {
+  const res = await apiFetch('/auth/me');
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.user || null;
 }

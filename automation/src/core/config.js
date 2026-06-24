@@ -18,7 +18,7 @@ export const config = {
     lastName: process.env.REG_LAST_NAME || 'DOE',
     middleName: process.env.REG_MIDDLE_NAME || '',
     firstName: process.env.REG_FIRST_NAME || 'JOHN',
-    dateOfBirth: process.env.REG_DATE_OF_BIRTH || '01/01/1990',
+    dateOfBirth: process.env.REG_DATE_OF_BIRTH || '01011990',
     gender: process.env.REG_GENDER || 'Male',
     residentialStatus: process.env.REG_RESIDENTIAL || 'Resident',
     email: process.env.REG_EMAIL || '',

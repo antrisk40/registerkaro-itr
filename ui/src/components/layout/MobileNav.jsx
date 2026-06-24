@@ -2,15 +2,17 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-
-const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/launch', label: 'Launch' },
-  { href: '/jobs', label: 'Jobs' },
-];
+import { useAuth } from '../../context/AuthContext';
 
 export default function MobileNav() {
   const pathname = usePathname();
+  const { isAdmin } = useAuth();
+
+  const navItems = [
+    ...(isAdmin ? [{ href: '/', label: 'Dashboard' }] : []),
+    { href: '/launch', label: 'Launch' },
+    { href: '/jobs', label: isAdmin ? 'Jobs' : 'My Jobs' },
+  ];
 
   const isActive = (href) => {
     if (href === '/') return pathname === '/';
@@ -19,7 +21,7 @@ export default function MobileNav() {
 
   return (
     <nav className="lg:hidden flex border-b border-white/10 bg-black/30">
-      {NAV_ITEMS.map((item) => (
+      {navItems.map((item) => (
         <Link
           key={item.href}
           href={item.href}

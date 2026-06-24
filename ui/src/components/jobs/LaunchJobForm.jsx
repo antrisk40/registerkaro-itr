@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getApiBase } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 import Card from '../ui/Card';
 import Field from '../ui/Field';
 import Input from '../ui/Input';
@@ -52,13 +52,18 @@ export default function LaunchJobForm() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(`${getApiBase()}/jobs/launch`, {
+      const res = await apiFetch('/jobs/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pan, isOthers, category,
           lastName, middleName, firstName,
-          dateOfBirth: dateOfBirth ? dateOfBirth.split('-').reverse().join('/') : '',
+          dateOfBirth: dateOfBirth
+            ? (() => {
+                const [y, m, d] = dateOfBirth.split('-');
+                return `${m}${d}${y}`;
+              })()
+            : '',
           gender, residentialStatus,
           email, emailBelongsTo, mobile, mobileBelongsTo,
           country, flat, road, pincode, postOffice, area, town, state
@@ -148,7 +153,7 @@ export default function LaunchJobForm() {
                 <Input type="text" value={middleName} onChange={(e) => setMiddleName(e.target.value.toUpperCase())} />
               </Field>
 
-              <Field label="Date of Birth *">
+              <Field label="Date of Birth * (portal: MMDDYYYY)">
                 <Input
                   type="date"
                   value={dateOfBirth}
