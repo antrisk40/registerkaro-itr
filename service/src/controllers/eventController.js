@@ -44,7 +44,7 @@ export const handleWebhookEvent = async (req, res) => {
         $set: { status: phase, updatedAt: Date.now() },
         $setOnInsert: { maskedPan: 'ABCDE1234F', createdAt: Date.now() }
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     // Broadcast the event to any active SSE connections listening to this jobId

@@ -73,7 +73,7 @@ export const submitOtp = async (req, res) => {
     const job = await Job.findByIdAndUpdate(
       jobId,
       { suppliedOtp: otp, lastOtpError: null, updatedAt: Date.now() },
-      { new: true }
+      { returnDocument: 'after' }
     );
     return res.status(200).json({ success: true, job: sanitizeJobForUser(job.toObject(), req.user) });
   } catch (error) {
@@ -92,7 +92,7 @@ export const requestResendOtp = async (req, res) => {
     const job = await Job.findByIdAndUpdate(
       jobId,
       { $set: { resendOtpRequested: true, suppliedOtp: null, lastOtpError: null, updatedAt: Date.now() } },
-      { new: true }
+      { returnDocument: 'after' }
     );
     return res.status(200).json({ success: true, job: sanitizeJobForUser(job.toObject(), req.user) });
   } catch (error) {
@@ -158,7 +158,7 @@ export const patchJob = async (req, res) => {
     const job = await Job.findByIdAndUpdate(
       jobId,
       { $set: updates },
-      { new: true, upsert: req.isBot }
+      { returnDocument: 'after', upsert: req.isBot }
     );
     return res.status(200).json({ success: true, job: sanitizeJobForUser(job.toObject(), req.user) });
   } catch (error) {
@@ -183,7 +183,7 @@ export const adminEditJob = async (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    const job = await Job.findByIdAndUpdate(jobId, { $set: updates }, { new: true });
+    const job = await Job.findByIdAndUpdate(jobId, { $set: updates }, { returnDocument: 'after' });
     return res.status(200).json({ success: true, job: sanitizeJobForUser(job.toObject(), req.user) });
   } catch (error) {
     console.error('[Jobs] Error editing job:', error);

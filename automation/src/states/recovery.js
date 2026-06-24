@@ -1,8 +1,6 @@
 import { emitEvent } from '../utils/emitter.js';
 import { safeClick, safeFill, sleep } from '../core/dom.js';
-import { pollForAadhaarOtpChoice } from '../utils/polling.js';
 import { config } from '../core/config.js';
-import { botPatch } from '../utils/apiClient.js';
 
 export const handleForgotPwdPan = async (page, context) => {
   console.log('[State] FORGOT_PASSWORD_PAN');
@@ -67,54 +65,6 @@ export const handleForgotPwdMethod = async (page, context) => {
   await sleep(3000);
 };
 
-const DEFAULT_AADHAAR_OTP_OPTIONS = ['I already have an OTP', 'Generate OTP'];
-
-const readOtpChoiceOptions = async (page) => {
-  const options = await page.evaluate(() =>
-    [...document.querySelectorAll('mat-radio-button, [role="radio"]')]
-      .map(el => (el.textContent || '').replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-  );
-  return options.length >= 2 ? options : DEFAULT_AADHAAR_OTP_OPTIONS;
-};
-
-const clickOtpChoice = async (page, choice) => {
-  const clicked = await page.evaluate((choiceText) => {
-    const wrappers = [...document.querySelectorAll('mat-radio-button, [role="radio"]')];
-    const normalized = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const targetChoice = normalized(choiceText);
-
-    const target = wrappers.find(el => normalized(el.textContent).includes(targetChoice))
-      || wrappers.find(el => /generate otp/i.test(el.textContent || '') && /generate/i.test(targetChoice))
-      || wrappers.find(el => /already have/i.test(el.textContent || '') && /already/i.test(targetChoice))
-      || wrappers[wrappers.length - 1];
-
-    if (!target) return false;
-
-    const innerInput = target.querySelector('input[type="radio"]');
-    if (innerInput) {
-      innerInput.click();
-      innerInput.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    target.click();
-    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    return true;
-  }, choice);
-
-  return clicked;
-};
-
-const clickContinueOnPortal = async (page) =>
-  page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button, [role="button"]')];
-    const cont = buttons.find(b => /continue/i.test(b.textContent || '') && b.offsetParent !== null);
-    if (!cont) return false;
-    cont.removeAttribute('disabled');
-    cont.classList.remove('mat-button-disabled');
-    cont.click();
-    return true;
-  });
-
 const handleUidaiConsentPopup = async (page) => {
   try {
     const checkbox = page.getByRole('checkbox').first();
@@ -136,53 +86,102 @@ const handleUidaiConsentPopup = async (page) => {
 export const handleForgotPwdOtpChoice = async (page, context) => {
   console.log('[State] FORGOT_PASSWORD_OTP_CHOICE');
 
+  // If we already applied this successfully, the page should navigate away.
+  // If we're still here, reset the flag and retry — don't deadlock with a sleep.
   if (context.aadhaarOtpChoiceApplied) {
-    await sleep(2000);
-    return;
+    console.log('[OtpChoice] Flag was set but still on this screen — resetting and retrying...');
+    context.aadhaarOtpChoiceApplied = false;
+    await sleep(1000);
   }
 
-  if (context.regData?.aadhaarOtpChoice) {
-    const choice = context.regData.aadhaarOtpChoice;
-    await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Applying selected option: "${choice}"`);
-    const clicked = await clickOtpChoice(page, choice);
-    await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Radio clicked via JS: ${clicked}`);
-    await sleep(1500);
-    const continueBtnClicked = await clickContinueOnPortal(page);
-    await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Continue clicked via JS: ${continueBtnClicked}`);
-    await sleep(3000);
-    await handleUidaiConsentPopup(page);
-    delete context.regData.aadhaarOtpChoice;
-    context.aadhaarOtpChoiceApplied = true;
-    return;
+  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', 'Auto-selecting "Generate OTP" (2nd radio)...');
+
+  // ── Step 1: Click the LABEL of the 2nd mat-radio-button ──────────────────
+  // Angular Material registers clicks on the <label> wrapping the radio circle.
+  // Clicking the hidden inner <input> doesn't trigger Angular FormControl update.
+  let radioClicked = false;
+  try {
+    const radioButtons = page.locator('mat-radio-button');
+    const radioCount = await radioButtons.count();
+    console.log(`[OtpChoice] Found ${radioCount} mat-radio-button(s)`);
+
+    // 2nd radio = "Generate OTP"; fall back to last if only 1 exists
+    const targetIdx = Math.min(1, radioCount - 1);
+    const targetRadio = radioButtons.nth(targetIdx);
+
+    // Prefer clicking the <label> — this is what Angular's (click) binding reacts to
+    const label = targetRadio.locator('label');
+    if (await label.count() > 0) {
+      await label.first().click({ timeout: 6000 });
+      console.log('[OtpChoice] Clicked <label> of 2nd radio');
+    } else {
+      await targetRadio.click({ timeout: 6000 });
+      console.log('[OtpChoice] Clicked mat-radio-button wrapper directly');
+    }
+    radioClicked = true;
+  } catch (e) {
+    console.warn('[OtpChoice] Label click failed, trying text-match fallback:', e.message);
+    try {
+      const generateRadio = page.locator('mat-radio-button').filter({ hasText: /generate otp/i });
+      if (await generateRadio.count() > 0) {
+        const lbl = generateRadio.first().locator('label');
+        if (await lbl.count() > 0) {
+          await lbl.first().click({ timeout: 5000 });
+        } else {
+          await generateRadio.first().click({ timeout: 5000 });
+        }
+        radioClicked = true;
+        console.log('[OtpChoice] Text-match fallback radio click succeeded');
+      }
+    } catch (e2) {
+      console.warn('[OtpChoice] All radio strategies failed:', e2.message);
+    }
   }
 
-  const options = await readOtpChoiceOptions(page);
-  const message = 'Aadhaar OTP required. Do you want to generate a new OTP or use an existing one?';
+  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Radio clicked: ${radioClicked} — waiting for Continue to enable...`);
 
-  await emitEvent(context.jobId, 'info', 'CORRECTION_GATE', message);
-  await botPatch(`${config.API_URL}/jobs/${context.jobId}`, {
-    status: 'CORRECTION_GATE',
-    correctionMessage: message,
-    correctionField: 'aadhaarOtpChoice',
-    correctionOptions: options,
-  }).catch(() => {});
+  // ── Step 2: Wait up to 4s for Angular to enable Continue, then click ──────
+  const continueBtn = page.getByRole('button', { name: /continue/i }).first();
+  let continueClicked = false;
 
-  const choice = await pollForAadhaarOtpChoice(context.jobId);
-  context.regData = { ...context.regData, aadhaarOtpChoice: choice };
+  for (let i = 0; i < 8; i++) {
+    await sleep(500);
+    const enabled = await continueBtn.isEnabled({ timeout: 300 }).catch(() => false);
+    if (enabled) {
+      try {
+        await continueBtn.click({ timeout: 5000 });
+        continueClicked = true;
+        console.log('[OtpChoice] Continue clicked after being enabled by Angular');
+      } catch (e) {
+        console.warn('[OtpChoice] Click on enabled Continue threw:', e.message);
+      }
+      break;
+    }
+  }
 
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `User selected: "${choice}" — continuing on portal...`);
+  if (!continueClicked) {
+    // Button stayed disabled — strip Angular disabled attributes and force-submit
+    console.warn('[OtpChoice] Continue never became enabled — force-submitting via JS...');
+    await page.evaluate(() => {
+      const btns = [...document.querySelectorAll('button')];
+      const cont = btns.find(b => /continue/i.test((b.textContent || '').trim()));
+      if (cont) {
+        cont.removeAttribute('disabled');
+        cont.removeAttribute('aria-disabled');
+        cont.classList.remove(
+          'mat-button-disabled',
+          'mat-mdc-button-disabled',
+          'mdc-button--disabled'
+        );
+        cont.click();
+        continueClicked = true;
+      }
+    });
+  }
 
-  const clicked = await clickOtpChoice(page, choice);
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Radio clicked via JS: ${clicked}`);
-  await sleep(1500);
-
-  const continueBtnClicked = await clickContinueOnPortal(page);
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Continue clicked via JS: ${continueBtnClicked}`);
+  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Continue action done (clicked=${continueClicked}) — waiting for UIDAI consent popup...`);
   await sleep(3000);
 
   await handleUidaiConsentPopup(page);
-  delete context.regData.aadhaarOtpChoice;
   context.aadhaarOtpChoiceApplied = true;
 };
-
-

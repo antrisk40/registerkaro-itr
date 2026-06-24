@@ -40,7 +40,7 @@ const seed = async () => {
         passwordHash,
         active: true,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     console.log(`[Seed] ${user.role} user "${user.username}" ready (${entry.password})`);
   }

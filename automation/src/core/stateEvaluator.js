@@ -28,6 +28,39 @@ const checkVisibility = async (page, selector) => {
   }
 };
 
+/**
+ * Broad OTP-screen detection — covers both registration and forgot-password flows.
+ * The income-tax portal uses different input patterns depending on the flow:
+ *   - Registration OTP:         input.otp-input  /  input[autocomplete="one-time-code"]
+ *   - Forgot-password OTP:      individual digit boxes (inputmode="numeric" maxlength="1")
+ *                               OR formcontrolname like "otp1".."otp6" / "aadhaarOtp"
+ * This helper centralises the check so we never fall through to FORGOT_PASSWORD_OTP_CHOICE
+ * when we're actually on the OTP entry page.
+ */
+const isOtpScreen = async (page) => {
+  // Standard patterns
+  if (await checkVisibility(page,
+    '.otp-input, input[autocomplete="one-time-code"], input[formcontrolname="otp"]'
+  )) return true;
+
+  // Income-tax portal forgot-password OTP: individual digit boxes
+  if (await checkVisibility(page,
+    'input[inputmode="numeric"][maxlength="1"], input[type="tel"][maxlength="1"]'
+  )) return true;
+
+  // formcontrolname-based OTP fields (otp1, otp2 … or aadhaarOtp)
+  if (await checkVisibility(page,
+    'input[formcontrolname^="otp"], input[formcontrolname*="Otp" i], input[formcontrolname*="aadhaar" i]'
+  )) return true;
+
+  // Heading text cues
+  if (await checkVisibility(page, 'text="Enter OTP"') ||
+      await checkVisibility(page, 'text="Verify OTP"') ||
+      await checkVisibility(page, 'text="OTP Verification"')) return true;
+
+  return false;
+};
+
 export const determineState = async (page) => {
   const url = page.url();
 
@@ -41,10 +74,9 @@ export const determineState = async (page) => {
     return STATES.SUCCESS;
   }
 
-  // 2. OTP screen (can appear anywhere)
-  const isOtpVisible = await checkVisibility(page, '.otp-input, input[autocomplete="one-time-code"], input[formcontrolname="otp"]') ||
-                       await checkVisibility(page, 'text="Enter OTP"');
-  if (isOtpVisible) {
+  // 2. OTP screen — checked GLOBALLY before any flow-specific logic so that the
+  //    forgot-password OTP entry page is never misidentified as FORGOT_PASSWORD_OTP_CHOICE.
+  if (await isOtpScreen(page)) {
     return STATES.REG_OTP;
   }
 
@@ -68,7 +100,17 @@ export const determineState = async (page) => {
       return STATES.SET_PASSWORD;
     }
 
+    // ── OTP entry safety net inside forgot flow ───────────────────────────
+    // Even if the global check above missed an OTP screen (e.g. page still
+    // loading), catch it here before the radio-button check to prevent
+    // FORGOT_PASSWORD_OTP_CHOICE from triggering on the OTP entry page.
+    if (await isOtpScreen(page)) {
+      return STATES.REG_OTP;
+    }
+
     // OTP choice screen (radio buttons: "Generate OTP" / "I already have an OTP")
+    // IMPORTANT: only match when radio buttons are VISIBLE — Angular may leave
+    // hidden radio elements in the DOM on later screens.
     const hasGenerateOtp    = await checkVisibility(page, 'mat-radio-button:has-text("Generate OTP")');
     const hasAlreadyHaveOtp = await checkVisibility(page, 'mat-radio-button:has-text("I already have an OTP")');
     if (hasGenerateOtp || hasAlreadyHaveOtp) {
