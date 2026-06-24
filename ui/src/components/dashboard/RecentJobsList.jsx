@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import Card from '../ui/Card';
-import JobListItem from '../jobs/JobListItem';
 import EmptyState from '../ui/EmptyState';
 import Button from '../ui/Button';
+import JobStatusBadge from '../jobs/JobStatusBadge';
+import { formatJobDate } from '../../lib/jobs';
 
 export default function RecentJobsList({ jobs }) {
   if (jobs.length === 0) {
@@ -27,10 +28,42 @@ export default function RecentJobsList({ jobs }) {
           View all →
         </Link>
       </div>
-      <div className="space-y-3">
-        {jobs.map((job) => (
-          <JobListItem key={job._id} job={job} />
-        ))}
+      
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-gray-500">
+              <th className="pb-3 font-medium">Job ID</th>
+              <th className="pb-3 font-medium">PAN</th>
+              <th className="pb-3 font-medium">Status</th>
+              <th className="pb-3 font-medium">Updated</th>
+              <th className="pb-3 font-medium text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {jobs.map((job) => (
+              <tr key={job._id} className="hover:bg-white/[0.02] transition-colors group">
+                <td className="py-4 pr-4">
+                  <p className="text-xs text-gray-400 font-mono truncate max-w-[120px]">{job._id}</p>
+                </td>
+                <td className="py-4 pr-4">
+                  <p className="text-sm font-semibold text-gray-200">{job.maskedPan}</p>
+                </td>
+                <td className="py-4 pr-4">
+                  <JobStatusBadge status={job.status} />
+                </td>
+                <td className="py-4 pr-4">
+                  <p className="text-xs text-gray-500" suppressHydrationWarning>{formatJobDate(job.updatedAt)}</p>
+                </td>
+                <td className="py-4 text-right">
+                  <Link href={`/jobs/${job._id}`} className="text-sm text-brand-orange hover:text-orange-300 transition-colors opacity-80 hover:opacity-100">
+                    View Details →
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </Card>
   );

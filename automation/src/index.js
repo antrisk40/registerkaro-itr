@@ -9,7 +9,7 @@ import { handleUnknownState, handleLoginPage } from './states/login.js';
 import { handleRegBasicDetails, handleRegContactDetails, handleRegisterGetStarted } from './states/registration.js';
 import { handleForgotPwdMethod, handleForgotPwdOtpChoice, handleForgotPwdPan } from './states/recovery.js';
 import { handleOtpVerification, handleSetPassword } from './states/shared.js';
-import axios from 'axios';
+import { botPatch } from './utils/apiClient.js';
 
 chromium.use(stealth());
 
@@ -25,6 +25,10 @@ const executeState = async (page, state, context) => {
       // In this specific flow, if we hit the password page, it means the PAN exists and we should 
       // pivot to forgot password because we don't know their password.
       await emitEvent(context.jobId, 'warn', 'ALREADY_EXISTS', `PAN ${context.pan} is registered. Pivoting to Forgot Password.`);
+      
+      // Reset the forgot-password context flags since we are starting over
+      context.aadhaarOtpChoiceApplied = false;
+      context.unknownCount = 0;
       
       try {
         const forgotPwdLink = page.getByRole('link', { name: /Forgot Password/i }).first();
@@ -105,7 +109,7 @@ const runBotStateMachine = async () => {
 
   while (!context.isFinished) {
     try {
-      const currentState = await determineState(page);
+      const currentState = await determineState(page, context);
       console.log(`=== Evaluating State: ${currentState} ===`);
       
       await executeState(page, currentState, context);
@@ -125,7 +129,7 @@ const runBotStateMachine = async () => {
       } else {
         console.error('Fatal crash inside state machine:', err);
         await emitEvent(jobId, 'error', 'FAILED', `Fatal Bot Crash: ${err.message}`);
-        await axios.patch(`${config.API_URL}/jobs/${jobId}`, {
+        await botPatch(`${config.API_URL}/jobs/${jobId}`, {
           status: 'FAILED',
           outcomeMessage: `Bot crashed: ${err.message}`
         }).catch(() => {});

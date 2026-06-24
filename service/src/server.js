@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import eventRoutes from './routes/eventRoutes.js';
 import jobRoutes from './routes/jobRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,7 +19,7 @@ const app = express();
 // --- MIDDLEWARE ---
 const corsOptions = {
   origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Last-Event-ID'],
 };
 app.use(cors(corsOptions));
@@ -28,7 +29,7 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // --- ROUTES ---
-// Mount the event routes
+app.use('/', authRoutes);
 app.use('/', eventRoutes);
 app.use('/', jobRoutes);
 

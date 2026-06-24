@@ -1,8 +1,8 @@
-import axios from 'axios';
 import { emitEvent } from '../utils/emitter.js';
 import { pollForOtp, setOtpError } from '../utils/polling.js';
 import { safeClick, sleep, unlockPageScroll, lockPageScroll, blurActiveElement, dispatchInputEvents, getErrorBanner } from '../core/dom.js';
 import { config } from '../core/config.js';
+import { botPost, botPatch } from '../utils/apiClient.js';
 
 export const handleOtpVerification = async (page, context) => {
   console.log('[State] REG_OTP');
@@ -14,7 +14,7 @@ export const handleOtpVerification = async (page, context) => {
 
   const message = context.otpMessage || 'OTP sent. Please enter it on the dashboard.';
   await emitEvent(context.jobId, 'info', 'OTP_GATE', message);
-  await axios.post(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null }).catch(() => {});
+  await botPost(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null }).catch(() => {});
 
   const otp = await pollForOtp(context.jobId, page);
   console.log(`[Action] Entering OTP (attempt ${context.otpAttempts + 1})`);
@@ -46,7 +46,7 @@ export const handleOtpVerification = async (page, context) => {
       await setOtpError(context.jobId, errMsg);
     } else {
       // Success
-      await axios.post(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null, suppliedOtp: null }).catch(() => {});
+      await botPost(`${config.API_URL}/jobs/${context.jobId}`, { lastOtpError: null, suppliedOtp: null }).catch(() => {});
     }
   }
 };
@@ -158,24 +158,61 @@ export const handleSetPassword = async (page, context) => {
   const newPassword = generateSecurePassword();
   console.log(`[SetPassword] Generated password for job ${context.jobId}`);
 
-  const newPwdSelector = 'input[formcontrolname="newPassword"], input[formcontrolname="password"], input[id*="newPassword" i], input[type="password"]';
-  const confirmPwdSelector = 'input[formcontrolname="confirmPassword"], input[formcontrolname="reenterPassword"], input[id*="confirm" i]';
-
-  const newPwdInput = page.locator(newPwdSelector).first();
-  await newPwdInput.waitFor({ state: 'visible', timeout: 10000 });
-
-  const confirmPwdInput = page.locator(confirmPwdSelector).last();
-
-  await fillPasswordField(page, newPwdSelector, newPassword);
+  // Wait for at least one password field to appear
+  await page.locator('input[type="password"]').first().waitFor({ state: 'visible', timeout: 10000 });
   await sleep(500);
-  await fillPasswordField(page, confirmPwdSelector, newPassword);
+
+  // Collect all visible password inputs in DOM order and fill them sequentially
+  const filledOk = await page.evaluate(async (pwd) => {
+    const inputs = [...document.querySelectorAll('input[type="password"]')]
+      .filter(el => el.offsetParent !== null); // only visible ones
+
+    if (inputs.length === 0) return false;
+
+    const fill = (el, value) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new InputEvent('input',  { bubbles: true, inputType: 'insertText', data: value }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur',   { bubbles: true }));
+    };
+
+    // Fill first field (newPassword) and second field (confirmPassword) if present
+    fill(inputs[0], pwd);
+    if (inputs[1]) fill(inputs[1], pwd);
+    return true;
+  }, newPassword);
+
+  console.log(`[SetPassword] JS fill result: ${filledOk}`);
+  await sleep(600);
+
+  // Also drive via Playwright pressSequentially as a secondary layer for Angular reactivity
+  try {
+    const pwdFields = page.locator('input[type="password"]');
+    const count = await pwdFields.count();
+    for (let i = 0; i < Math.min(count, 2); i++) {
+      const field = pwdFields.nth(i);
+      if (await field.isVisible({ timeout: 1000 })) {
+        await field.click({ timeout: 3000, noWaitAfter: true });
+        await page.keyboard.press('Control+a');
+        await page.keyboard.press('Backspace');
+        await field.pressSequentially(newPassword, { delay: 60 });
+        await dispatchInputEvents(field);
+        await sleep(300);
+      }
+    }
+  } catch (e) {
+    console.warn('[SetPassword] Playwright pressSequentially fallback error:', e.message);
+  }
+
   await sleep(800);
 
   // Force-enable the Submit/Continue button and click it
   const submitClicked = await page.evaluate(() => {
     const buttons = [...document.querySelectorAll('button, [role="button"]')];
     const submitBtn = buttons.find(b =>
-      /submit|continue|reset|update/i.test(b.textContent || '') && b.offsetParent !== null
+      /submit|continue|reset|update|set password/i.test(b.textContent || '') && b.offsetParent !== null
     );
     if (!submitBtn) return false;
     submitBtn.removeAttribute('disabled');
@@ -185,9 +222,8 @@ export const handleSetPassword = async (page, context) => {
   });
 
   if (!submitClicked) {
-    // Fallback if JS click didn't find the button
     await safeClick(
-      page.getByRole('button', { name: /Submit|Continue|Reset|Update/i }).first(),
+      page.getByRole('button', { name: /Submit|Continue|Reset|Update|Set Password/i }).first(),
       'Submit Password'
     );
   }
@@ -195,7 +231,7 @@ export const handleSetPassword = async (page, context) => {
   await sleep(5000);
 
   // Save plain-text password via API — the service layer encrypts it with AES-256 before writing to MongoDB
-  await axios.patch(`${config.API_URL}/jobs/${context.jobId}`, {
+  await botPatch(`${config.API_URL}/jobs/${context.jobId}`, {
     status: 'SUCCESS',
     outcomeMessage: 'Password set successfully via Aadhaar OTP recovery.',
     recoveredPassword: newPassword,  // service will encrypt this → encryptedPassword in DB

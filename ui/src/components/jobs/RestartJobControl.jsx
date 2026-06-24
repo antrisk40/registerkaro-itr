@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getApiBase } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 import Button from '../ui/Button';
 
 export default function RestartJobControl({ jobId }) {
@@ -15,7 +15,7 @@ export default function RestartJobControl({ jobId }) {
     setRestarting(true);
     try {
       let reqBody = null;
-      let res = await fetch(`${getApiBase()}/jobs/${jobId}/clone`, { method: 'POST' });
+      let res = await apiFetch(`/jobs/${jobId}/clone`, { method: 'POST' });
       let data = await res.json();
       
       if (!res.ok && data.error === 'PAN_REQUIRED') {
@@ -24,7 +24,7 @@ export default function RestartJobControl({ jobId }) {
           setRestarting(false);
           return;
         }
-        res = await fetch(`${getApiBase()}/jobs/${jobId}/clone`, {
+        res = await apiFetch(`/jobs/${jobId}/clone`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pan: missingPan.toUpperCase() })

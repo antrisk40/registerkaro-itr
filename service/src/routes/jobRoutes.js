@@ -1,37 +1,31 @@
 import express from 'express';
-import { submitOtp, getJobStatus, getAllJobs, patchJob, requestResendOtp, revealPassword } from '../controllers/jobController.js';
+import {
+  submitOtp,
+  getJobStatus,
+  getAllJobs,
+  patchJob,
+  requestResendOtp,
+  revealPassword,
+  adminEditJob,
+} from '../controllers/jobController.js';
 import { launchJob, stopJob, cloneJob } from '../controllers/orchestratorController.js';
+import { authenticate, requireRole, requireUser } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// POST /api/jobs/launch - Launch a new bot instance (MUST BE BEFORE /:jobId)
-router.post('/api/jobs/launch', launchJob);
+router.use(authenticate);
 
-// GET /api/jobs - Dashboard job list
-router.get('/api/jobs', getAllJobs);
-
-// GET /api/jobs/:jobId - For the bot to poll
+// Bot-only unauthenticated-style access uses WEBHOOK_SECRET via authenticate middleware
+router.post('/api/jobs/launch', requireUser, launchJob);
+router.get('/api/jobs', requireUser, getAllJobs);
 router.get('/api/jobs/:jobId', getJobStatus);
-
-// GET /api/jobs/:jobId/reveal-password - Decrypt and return the stored password
-router.get('/api/jobs/:jobId/reveal-password', revealPassword);
-
-// POST /api/jobs/:jobId/otp - OTP submission from the UI
-router.post('/api/jobs/:jobId/otp', submitOtp);
-
-// POST /api/jobs/:jobId/resend-otp - Ask bot to click Resend on portal
-router.post('/api/jobs/:jobId/resend-otp', requestResendOtp);
-
-// PATCH /api/jobs/:jobId - Generic patch (bot stores PID, OTP retry clear)
+router.get('/api/jobs/:jobId/reveal-password', requireUser, requireRole('admin'), revealPassword);
+router.post('/api/jobs/:jobId/otp', requireUser, submitOtp);
+router.post('/api/jobs/:jobId/resend-otp', requireUser, requestResendOtp);
 router.patch('/api/jobs/:jobId', patchJob);
-
-// POST /api/jobs/:jobId - Generic patch (legacy alias kept for bot compat)
 router.post('/api/jobs/:jobId', patchJob);
-
-// POST /api/jobs/:jobId/stop - Kill the running bot process
-router.post('/api/jobs/:jobId/stop', stopJob);
-
-// POST /api/jobs/:jobId/clone - Restart a stopped/failed job
-router.post('/api/jobs/:jobId/clone', cloneJob);
+router.post('/api/jobs/:jobId/stop', requireUser, stopJob);
+router.post('/api/jobs/:jobId/clone', requireUser, cloneJob);
+router.put('/api/jobs/:jobId/admin-edit', requireUser, requireRole('admin'), adminEditJob);
 
 export default router;

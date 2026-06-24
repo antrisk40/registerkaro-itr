@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { getApiBase } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 
 export default function RecoveredPasswordCard({ jobId, hasPassword }) {
   const [password, setPassword] = useState(null);
@@ -16,7 +16,7 @@ export default function RecoveredPasswordCard({ jobId, hasPassword }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${getApiBase()}/jobs/${jobId}/reveal-password`);
+      const res = await apiFetch(`/jobs/${jobId}/reveal-password`);
       if (!res.ok) throw new Error('Failed to decrypt password');
       const data = await res.json();
       setPassword(data.password);

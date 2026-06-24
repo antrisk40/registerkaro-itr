@@ -1,4 +1,5 @@
-import AppShell from '../components/layout/AppShell';
+import { AuthProvider } from '../context/AuthContext';
+import ClientShell from '../components/layout/ClientShell';
 import './globals.css';
 
 export const metadata = {
@@ -10,7 +11,9 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body className="min-h-screen font-sans">
-        <AppShell>{children}</AppShell>
+        <AuthProvider>
+          <ClientShell>{children}</ClientShell>
+        </AuthProvider>
       </body>
     </html>
   );

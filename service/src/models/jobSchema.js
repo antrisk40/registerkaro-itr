@@ -51,6 +51,10 @@ const jobSchema = new mongoose.Schema(
     // PID of the spawned Playwright child process — used to stop the bot
     pid: { type: Number, default: null },
 
+    // Operator who launched this job (SPOC scoping)
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    createdByName: { type: String, default: null },
+
     // All registration form payload fields sent from the UI
     registrationPayload: {
       isOthers:          { type: Boolean, default: false },
@@ -58,7 +62,7 @@ const jobSchema = new mongoose.Schema(
       lastName:          { type: String, default: '' },
       middleName:        { type: String, default: '' },
       firstName:         { type: String, default: '' },
-      dateOfBirth:       { type: String, default: '' }, // DD/MM/YYYY
+      dateOfBirth:       { type: String, default: '' }, // MMDDYYYY
       gender:            { type: String, enum: ['Male', 'Female', 'Transgender', ''], default: '' },
       residentialStatus: { type: String, enum: ['Resident', 'Non Resident', ''], default: 'Resident' },
       email:             { type: String, default: '' },
