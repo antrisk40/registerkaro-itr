@@ -86,100 +86,95 @@ const handleUidaiConsentPopup = async (page) => {
 export const handleForgotPwdOtpChoice = async (page, context) => {
   console.log('[State] FORGOT_PASSWORD_OTP_CHOICE');
 
-  // If we already applied this successfully, the page should navigate away.
-  // If we're still here, reset the flag and retry — don't deadlock with a sleep.
+  // If we already applied this choice, the state evaluator should NOT be sending
+  // us here again (context guard in stateEvaluator). If it somehow did anyway
+  // (e.g. initial loop before flag was set), just wait for page to settle.
+  // NEVER reset the flag — resetting causes an infinite retry loop.
   if (context.aadhaarOtpChoiceApplied) {
-    console.log('[OtpChoice] Flag was set but still on this screen — resetting and retrying...');
-    context.aadhaarOtpChoiceApplied = false;
-    await sleep(1000);
+    console.log('[OtpChoice] Already applied — unexpected re-entry. Waiting for page to settle...');
+    await sleep(3000);
+    return;
   }
 
   await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', 'Auto-selecting "Generate OTP" (2nd radio)...');
 
-  // ── Step 1: Click the LABEL of the 2nd mat-radio-button ──────────────────
-  // Angular Material registers clicks on the <label> wrapping the radio circle.
-  // Clicking the hidden inner <input> doesn't trigger Angular FormControl update.
+  // ── Step 1: Vigorously select the "Generate OTP" option ──────────────────
+  // Angular Material can be stubborn. We try multiple native and JS strategies.
   let radioClicked = false;
+  
+  // Strategy A: Find the label text directly and click it (most reliable for real browsers)
   try {
-    const radioButtons = page.locator('mat-radio-button');
-    const radioCount = await radioButtons.count();
-    console.log(`[OtpChoice] Found ${radioCount} mat-radio-button(s)`);
-
-    // 2nd radio = "Generate OTP"; fall back to last if only 1 exists
-    const targetIdx = Math.min(1, radioCount - 1);
-    const targetRadio = radioButtons.nth(targetIdx);
-
-    // Prefer clicking the <label> — this is what Angular's (click) binding reacts to
-    const label = targetRadio.locator('label');
-    if (await label.count() > 0) {
-      await label.first().click({ timeout: 6000 });
-      console.log('[OtpChoice] Clicked <label> of 2nd radio');
-    } else {
-      await targetRadio.click({ timeout: 6000 });
-      console.log('[OtpChoice] Clicked mat-radio-button wrapper directly');
+    const textEl = page.locator('label').filter({ hasText: /Generate OTP/i }).first();
+    if (await textEl.isVisible({ timeout: 2000 })) {
+      await textEl.click({ timeout: 5000 });
+      radioClicked = true;
+      console.log('[OtpChoice] Strategy A (label text) succeeded');
     }
-    radioClicked = true;
   } catch (e) {
-    console.warn('[OtpChoice] Label click failed, trying text-match fallback:', e.message);
+    console.warn('[OtpChoice] Strategy A failed:', e.message);
+  }
+
+  // Strategy B: Click the mat-radio-button container directly
+  if (!radioClicked) {
     try {
-      const generateRadio = page.locator('mat-radio-button').filter({ hasText: /generate otp/i });
-      if (await generateRadio.count() > 0) {
-        const lbl = generateRadio.first().locator('label');
-        if (await lbl.count() > 0) {
-          await lbl.first().click({ timeout: 5000 });
-        } else {
-          await generateRadio.first().click({ timeout: 5000 });
-        }
+      const radioBtn = page.locator('mat-radio-button, [role="radio"]').filter({ hasText: /Generate/i }).first();
+      if (await radioBtn.isVisible({ timeout: 2000 })) {
+        await radioBtn.click({ timeout: 5000 });
         radioClicked = true;
-        console.log('[OtpChoice] Text-match fallback radio click succeeded');
+        console.log('[OtpChoice] Strategy B (mat-radio-button) succeeded');
       }
-    } catch (e2) {
-      console.warn('[OtpChoice] All radio strategies failed:', e2.message);
+    } catch (e) {
+      console.warn('[OtpChoice] Strategy B failed:', e.message);
     }
   }
 
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Radio clicked: ${radioClicked} — waiting for Continue to enable...`);
+  // Strategy C: Brute-force JS click on the element
+  if (!radioClicked) {
+    try {
+      await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('mat-radio-button, label'));
+        const target = els.find(el => /Generate OTP/i.test(el.innerText || el.textContent));
+        if (target) {
+          target.click();
+          // Dispatch change event to trigger Angular forms
+          const input = target.querySelector('input');
+          if (input) {
+            input.click();
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+      });
+      radioClicked = true;
+      console.log('[OtpChoice] Strategy C (JS brute-force) executed');
+    } catch (e) {
+      console.warn('[OtpChoice] Strategy C failed:', e.message);
+    }
+  }
 
-  // ── Step 2: Wait up to 4s for Angular to enable Continue, then click ──────
+  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Radio clicked: ${radioClicked} — clicking Continue...`);
+
+  // ── Step 2: Sleep briefly for Angular to process, then click Continue ────
+  await sleep(1500);
   const continueBtn = page.getByRole('button', { name: /continue/i }).first();
-  let continueClicked = false;
 
-  for (let i = 0; i < 8; i++) {
-    await sleep(500);
-    const enabled = await continueBtn.isEnabled({ timeout: 300 }).catch(() => false);
-    if (enabled) {
-      try {
-        await continueBtn.click({ timeout: 5000 });
-        continueClicked = true;
-        console.log('[OtpChoice] Continue clicked after being enabled by Angular');
-      } catch (e) {
-        console.warn('[OtpChoice] Click on enabled Continue threw:', e.message);
-      }
-      break;
-    }
-  }
-
-  if (!continueClicked) {
-    // Button stayed disabled — strip Angular disabled attributes and force-submit
-    console.warn('[OtpChoice] Continue never became enabled — force-submitting via JS...');
+  try {
+    await continueBtn.click({ timeout: 5000 });
+    console.log('[OtpChoice] Continue clicked');
+  } catch (e) {
+    // Force-click if Angular still shows it as disabled
+    console.warn('[OtpChoice] Normal click failed, force-clicking via JS:', e.message);
     await page.evaluate(() => {
-      const btns = [...document.querySelectorAll('button')];
-      const cont = btns.find(b => /continue/i.test((b.textContent || '').trim()));
+      const cont = [...document.querySelectorAll('button')]
+        .find(b => /continue/i.test((b.textContent || '').trim()));
       if (cont) {
         cont.removeAttribute('disabled');
         cont.removeAttribute('aria-disabled');
-        cont.classList.remove(
-          'mat-button-disabled',
-          'mat-mdc-button-disabled',
-          'mdc-button--disabled'
-        );
+        cont.classList.remove('mat-button-disabled', 'mat-mdc-button-disabled', 'mdc-button--disabled');
         cont.click();
-        continueClicked = true;
       }
     });
   }
 
-  await emitEvent(context.jobId, 'info', 'ACCOUNT_RECOVERY', `Continue action done (clicked=${continueClicked}) — waiting for UIDAI consent popup...`);
   await sleep(3000);
 
   await handleUidaiConsentPopup(page);

@@ -26,6 +26,10 @@ const executeState = async (page, state, context) => {
       // pivot to forgot password because we don't know their password.
       await emitEvent(context.jobId, 'warn', 'ALREADY_EXISTS', `PAN ${context.pan} is registered. Pivoting to Forgot Password.`);
       
+      // Reset the forgot-password context flags since we are starting over
+      context.aadhaarOtpChoiceApplied = false;
+      context.unknownCount = 0;
+      
       try {
         const forgotPwdLink = page.getByRole('link', { name: /Forgot Password/i }).first();
         if (await forgotPwdLink.isVisible({ timeout: 5000 })) {
@@ -105,7 +109,7 @@ const runBotStateMachine = async () => {
 
   while (!context.isFinished) {
     try {
-      const currentState = await determineState(page);
+      const currentState = await determineState(page, context);
       console.log(`=== Evaluating State: ${currentState} ===`);
       
       await executeState(page, currentState, context);

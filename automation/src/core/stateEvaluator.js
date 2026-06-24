@@ -61,7 +61,7 @@ const isOtpScreen = async (page) => {
   return false;
 };
 
-export const determineState = async (page) => {
+export const determineState = async (page, context = {}) => {
   const url = page.url();
 
   // 1. Success / Dashboard
@@ -111,24 +111,33 @@ export const determineState = async (page) => {
     // OTP choice screen (radio buttons: "Generate OTP" / "I already have an OTP")
     // IMPORTANT: only match when radio buttons are VISIBLE — Angular may leave
     // hidden radio elements in the DOM on later screens.
-    const hasGenerateOtp    = await checkVisibility(page, 'mat-radio-button:has-text("Generate OTP")');
-    const hasAlreadyHaveOtp = await checkVisibility(page, 'mat-radio-button:has-text("I already have an OTP")');
-    if (hasGenerateOtp || hasAlreadyHaveOtp) {
-      return STATES.FORGOT_PASSWORD_OTP_CHOICE;
+    // GUARD: if we've already applied this choice, NEVER return this state again
+    // regardless of what's visible — Angular SPA keeps old DOM alive.
+    if (!context.aadhaarOtpChoiceApplied) {
+      const hasGenerateOtp    = await checkVisibility(page, 'mat-radio-button:has-text("Generate OTP")');
+      const hasAlreadyHaveOtp = await checkVisibility(page, 'mat-radio-button:has-text("I already have an OTP")');
+      if (hasGenerateOtp || hasAlreadyHaveOtp) {
+        return STATES.FORGOT_PASSWORD_OTP_CHOICE;
+      }
     }
 
     // Method selection screen (radio: "OTP on mobile registered with Aadhaar")
-    if (await checkVisibility(page, 'mat-radio-button:has-text("OTP on mobile number registered with Aadhaar")')) {
+    // GUARD: skip if we're already past OTP choice — we should not go backward
+    if (!context.aadhaarOtpChoiceApplied &&
+        await checkVisibility(page, 'mat-radio-button:has-text("OTP on mobile number registered with Aadhaar")')) {
       return STATES.FORGOT_PASSWORD_METHOD;
     }
 
-    // PAN entry screen — only match if a non-password text input is visible
-    const panVisible = await checkVisibility(
-      page,
-      'input[formcontrolname*="pan" i], input[formcontrolname*="user" i], input[id*="pan" i], input[id*="user" i], input[placeholder*="User ID" i], input[placeholder*="PAN" i]'
-    );
-    if (panVisible) {
-      return STATES.FORGOT_PASSWORD_PAN;
+    // PAN entry screen — only match if we haven't yet applied OTP choice
+    // GUARD: once past OTP choice we must never restart from PAN entry
+    if (!context.aadhaarOtpChoiceApplied) {
+      const panVisible = await checkVisibility(
+        page,
+        'input[formcontrolname*="pan" i], input[formcontrolname*="user" i], input[id*="pan" i], input[id*="user" i], input[placeholder*="User ID" i], input[placeholder*="PAN" i]'
+      );
+      if (panVisible) {
+        return STATES.FORGOT_PASSWORD_PAN;
+      }
     }
 
     // Unknown step within forgot-password — wait for next poll cycle
