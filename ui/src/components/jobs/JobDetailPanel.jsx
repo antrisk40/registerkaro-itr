@@ -23,8 +23,15 @@ const isAadhaarOtpCorrectionLog = (log) =>
 
 export default function JobDetailPanel({ job: initialJob }) {
   const [stopped, setStopped] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(initialJob.status === 'SUCCESS');
   const { isAdmin } = useAuth();
   const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword } = useJobStatus(initialJob._id, initialJob.status, initialJob);
+
+  useEffect(() => {
+    if (status === 'SUCCESS') {
+      setShowSuccessModal(true);
+    }
+  }, [status]);
 
   const needsInput = INPUT_PHASES.includes(status) && !isTerminal && !stopped;
   const latestOtpPrompt = logs.filter((l) => INPUT_PHASES.includes(l.phase)).at(-1);
@@ -46,6 +53,25 @@ export default function JobDetailPanel({ job: initialJob }) {
 
   return (
     <div className="space-y-6">
+      {showSuccessModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0a1a]/80 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-[#1e1e2c] rounded-2xl shadow-2xl max-w-md w-full p-8 text-center relative border border-white/10">
+            <div className="mx-auto w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mb-6 border border-green-500/30">
+              <span className="text-3xl">🎉</span>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">ITR Credentials Created!</h2>
+            <p className="text-gray-400 mb-8 leading-relaxed">
+              The automation completed successfully. You can now log into the portal using the PAN and the generated password!
+            </p>
+            <button
+              onClick={() => setShowSuccessModal(false)}
+              className="w-full bg-brand-orange text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity"
+            >
+              Awesome, thanks!
+            </button>
+          </div>
+        </div>
+      )}
       {needsInput && (
         <Card className="p-5 border-orange-500/40 bg-orange-500/10">
           <div className="flex items-center gap-3 mb-4">
