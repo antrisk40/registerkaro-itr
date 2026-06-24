@@ -19,7 +19,7 @@ router.use(authenticate);
 router.post('/api/jobs/launch', requireUser, launchJob);
 router.get('/api/jobs', requireUser, getAllJobs);
 router.get('/api/jobs/:jobId', getJobStatus);
-router.get('/api/jobs/:jobId/reveal-password', requireUser, requireRole('admin'), revealPassword);
+router.get('/api/jobs/:jobId/reveal-password', requireUser, revealPassword);
 router.post('/api/jobs/:jobId/otp', requireUser, submitOtp);
 router.post('/api/jobs/:jobId/resend-otp', requireUser, requestResendOtp);
 router.patch('/api/jobs/:jobId', patchJob);

@@ -25,7 +25,7 @@ export default function JobDetailPanel({ job: initialJob }) {
   const [stopped, setStopped] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(initialJob.status === 'SUCCESS');
   const { isAdmin } = useAuth();
-  const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword } = useJobStatus(initialJob._id, initialJob.status, initialJob);
+  const { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, hasPassword } = useJobStatus(initialJob._id, initialJob.status, initialJob);
 
   useEffect(() => {
     if (status === 'SUCCESS') {
@@ -48,7 +48,6 @@ export default function JobDetailPanel({ job: initialJob }) {
   const effectiveCorrectionMessage = isAadhaarOtpGate
     ? (correctionMessage || latestCorrectionLog?.message || 'Aadhaar OTP required. Do you want to generate a new OTP or use an existing one?')
     : correctionMessage;
-  const hasPassword = isAdmin && !!(initialJob.hasPassword);
   const showAdminEdit = isAdmin && TERMINAL_STATUSES.includes(status);
 
   return (
@@ -119,8 +118,15 @@ export default function JobDetailPanel({ job: initialJob }) {
         </Card>
       )}
 
-      {hasPassword && (
-        <RecoveredPasswordCard jobId={initialJob._id} hasPassword={hasPassword} />
+      {(hasPassword || isAdmin) && (
+        <RecoveredPasswordCard
+          jobId={initialJob._id}
+          hasPassword={hasPassword}
+          isAdmin={isAdmin}
+          userId={initialJob.originalPan || initialJob.maskedPan}
+          generatedBy={initialJob.createdByName || '—'}
+          generatedAt={initialJob.updatedAt}
+        />
       )}
 
       {showAdminEdit && (

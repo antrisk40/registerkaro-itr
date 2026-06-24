@@ -16,7 +16,7 @@ export function useJobStatus(jobId, initialStatus, initialJob = {}) {
   const [correctionMessage, setCorrectionMessage] = useState(initialJob.correctionMessage || null);
   const [correctionField, setCorrectionField] = useState(initialJob.correctionField || null);
   const [correctionOptions, setCorrectionOptions] = useState(initialJob.correctionOptions || null);
-  const [recoveredPassword, setRecoveredPassword] = useState(initialJob.recoveredPassword || null);
+  const [hasPassword, setHasPassword] = useState(initialJob.hasPassword || false);
 
   const phaseFromLogs = useMemo(() => {
     for (let i = logs.length - 1; i >= 0; i--) {
@@ -53,8 +53,8 @@ export function useJobStatus(jobId, initialStatus, initialJob = {}) {
         if (data.job?.correctionOptions !== undefined) {
           setCorrectionOptions(data.job.correctionOptions || null);
         }
-        if (data.job?.recoveredPassword) {
-          setRecoveredPassword(data.job.recoveredPassword);
+        if (data.job?.hasPassword !== undefined) {
+          setHasPassword(data.job.hasPassword);
         }
       } catch { /* ignore */ }
     };
@@ -65,5 +65,5 @@ export function useJobStatus(jobId, initialStatus, initialJob = {}) {
     return () => clearInterval(id);
   }, [jobId, isTerminal]);
 
-  return { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, recoveredPassword };
+  return { status, logs, error, isTerminal, lastOtpError, correctionMessage, correctionField, correctionOptions, hasPassword };
 }

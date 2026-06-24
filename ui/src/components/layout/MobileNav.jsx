@@ -12,6 +12,7 @@ export default function MobileNav() {
     ...(isAdmin ? [{ href: '/', label: 'Dashboard' }] : []),
     { href: '/launch', label: 'Launch' },
     { href: '/jobs', label: isAdmin ? 'Jobs' : 'My Jobs' },
+    ...(isAdmin ? [{ href: '/users', label: 'Users' }] : []),
   ];
 
   const isActive = (href) => {

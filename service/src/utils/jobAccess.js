@@ -12,7 +12,7 @@ export const jobListFilterForUser = (user) =>
 
 export const sanitizeJobForUser = (job, user) => {
   const { encryptedPassword, ...safeJob } = job;
-  safeJob.hasPassword = user?.role === 'admin' && !!encryptedPassword;
+  safeJob.hasPassword = (user?.role === 'admin' || (user && String(job.createdBy) === String(user.id))) && !!encryptedPassword;
   return safeJob;
 };
 

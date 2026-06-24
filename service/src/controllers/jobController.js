@@ -36,14 +36,14 @@ export const getAllJobs = async (req, res) => {
 
 export const revealPassword = async (req, res) => {
   try {
-    if (!req.isBot && req.user?.role !== 'admin') {
-      return res.status(403).json({ error: 'Only administrators can reveal passwords' });
-    }
-
     const { jobId } = req.params;
     const access = await loadJobForUser(jobId, req.user, { isBot: req.isBot });
     if (access.error === 'not_found') return res.status(404).json({ error: 'Job not found' });
     if (access.error === 'forbidden') return res.status(403).json({ error: 'Forbidden' });
+
+    if (!req.isBot && req.user?.role === 'admin') {
+      return res.status(403).json({ error: 'Admins are not permitted to view decrypted passwords' });
+    }
 
     const job = access.job;
     if (!job.encryptedPassword) return res.status(404).json({ error: 'No password stored for this job' });

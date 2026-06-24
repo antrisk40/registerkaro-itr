@@ -228,9 +228,7 @@ export const handleSetPassword = async (page, context) => {
     );
   }
 
-  await sleep(5000);
-
-  // Save plain-text password via API — the service layer encrypts it with AES-256 before writing to MongoDB
+  // Save plain-text password via API immediately
   await botPatch(`${config.API_URL}/jobs/${context.jobId}`, {
     status: 'SUCCESS',
     outcomeMessage: 'Password set successfully via Aadhaar OTP recovery.',
@@ -238,6 +236,12 @@ export const handleSetPassword = async (page, context) => {
   }).catch(err => console.error('[SetPassword] Failed to save password:', err.message));
 
   await emitEvent(context.jobId, 'info', 'SUCCESS', '✅ Password reset complete! Click "Reveal Password" on the dashboard to view it.');
+  
+  // Set isFinished to true so the state machine cleanly exits without crashing
+  context.isFinished = true;
+
+  // Immediately close the tab
+  await page.close().catch(() => {});
 };
 
 export const fillPasswordField = async (page, selector, password) => {

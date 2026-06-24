@@ -78,3 +78,44 @@ export async function fetchMe() {
   const data = await res.json();
   return data.user || null;
 }
+
+export async function fetchUsers() {
+  try {
+    const res = await apiFetch('/users', { cache: 'no-store' });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function createUserRequest(userData) {
+  const res = await apiFetch('/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to create user');
+  return data;
+}
+
+export async function updateUserRequest(userId, userData) {
+  const res = await apiFetch(`/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to update user');
+  return data;
+}
+
+export async function deleteUserRequest(userId) {
+  const res = await apiFetch(`/users/${userId}`, {
+    method: 'DELETE',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to delete user');
+  return data;
+}

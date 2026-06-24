@@ -34,6 +34,7 @@ export default function Sidebar() {
     ...(isAdmin ? [{ href: '/', label: 'Dashboard', icon: '📊' }] : []),
     { href: '/launch', label: 'Launch Bot', icon: '🚀' },
     { href: '/jobs', label: isAdmin ? 'All Jobs' : 'My Jobs', icon: '📋' },
+    ...(isAdmin ? [{ href: '/users', label: 'Users', icon: '👥' }] : []),
   ];
 
   const handleLogout = () => {
@@ -44,8 +45,23 @@ export default function Sidebar() {
   return (
     <aside className="hidden lg:flex flex-col w-64 border-r border-white/10 bg-black/20 p-6 gap-8">
       <div>
-        <p className="text-xs uppercase tracking-widest text-gray-500 mb-1">RegisterKaro</p>
-        <h2 className="text-lg font-bold text-white">Automation Engine</h2>
+        <a href="https://www.registerkaro.in/" className="Header_new-header-logo-section__0jeim mb-4">
+          <img
+            alt="RegisterKaro Logo"
+            title="RegisterKaro Logo"
+            loading="eager"
+            width="28"
+            height="34"
+            className="Header_new-header-logo-image__j7h3q"
+            style={{ color: 'transparent' }}
+            src="https://www.registerkaro.in/_next/static/media/rk_color_logo.5b7ee582.svg"
+          />
+          <div className="Header_new-header-logo-text__CS50H">
+            <span className="Header_new-header-register-text__U1Fft">Register</span>
+            <span className="Header_new-header-karo-text__M37x2">Karo</span>
+          </div>
+        </a>
+        <h2 className="text-xs uppercase tracking-widest text-gray-500 font-semibold">Automation Engine</h2>
         {user && (
           <p className="text-xs text-gray-400 mt-2">
             {user.displayName}
